@@ -11,7 +11,7 @@ deepspeed --include localhost:0,1,2,3 --master_port 29511 fine_tuning.py \
   --lr 3e-4 \
   --output_dir $output_dir \
   --finetune $ckpt_path \
-  --dataset CSL_Daily \
+  --dataset How2Sign \
   --task SLT \
   --rgb_support # enable RGB-pose setting
 

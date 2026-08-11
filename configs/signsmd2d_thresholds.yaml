@@ -1,0 +1,65 @@
+# SignSMD-2D threshold manifest (contract signsmd2d_v0_2, coarse variant).
+# All positions in shoulder-width units of the 2D body frame; angles in
+# radians; face measures in interocular units, neutral-relative.
+# All rates are PER STEP of the trainer-aligned pose timeline (the compiler
+# resamples with the trainer's linear rule first; for clips within
+# --max_length one step = one frame, longer clips see proportionally larger
+# per-step motion — exactly what the model sees at its input).
+# Heuristic initial values — any statistical calibration must use the train
+# split only. This file is hashed into every generation manifest.
+
+version: signsmd2d_v0_2
+confidence_min: 0.3
+max_interp_frames: 3
+
+segmentation:
+  smooth_window: 5
+  min_interval_frames: 8
+  wrist_speed: 0.045       # shoulder-widths / step
+  handshape_rate: 0.10     # summed |d curl| over 5 fingers, rad / step
+  orientation_rate: 0.12   # |d palm-cross-proxy| / step
+  arm_rate: 0.05           # |d elbow bend| + |d forearm angle|, rad / step
+  bimanual_rate: 0.05      # |d hand separation|, shoulder-widths / step
+  brow_rate: 0.020         # / step
+  mouth_rate: 0.035        # / step
+  tilt_rate: 0.030         # rad / step
+
+hands:
+  min_valid_points: 13     # of 21, else the hand is "not detected"
+  curl_change_min: 1.0     # rad, summed 5-finger curl travel/net change
+                           # below which the hand counts as shape-stable
+  curl_extended_max: 0.9   # summed 3-joint bend below -> finger extended
+  curl_closed_min: 2.2     # above -> finger closed
+  spread_open_min: 0.28    # mean adjacent finger-direction angle
+  opposition_pinch_max: 0.7  # thumb-tip to fingertip, palm-scale units
+  edge_on_span_max: 0.45   # knuckle-line length / palm scale -> edge-on
+
+space:
+  side_x: 0.35
+  upper_y: 0.45
+  lower_y: -0.35
+  near_face_dist: 0.45
+  overlap_dist: 0.28
+
+movement:
+  hold_speed_max: 0.02
+  slow_max: 0.045
+  fast_min: 0.10
+  straightness_min: 0.75   # net displacement / path length -> straight
+  repetition_reversals: 2
+  separation_change_min: 0.25
+
+arm:
+  bend_slight_max: 0.6     # 0 = straight arm
+  bend_partial_max: 1.5
+
+nonmanual:
+  brow_raised_min: 0.045
+  mouth_open_min: 0.18
+  tilt_min: 0.12
+
+roles:
+  dominant_ratio: 1.6      # path-length ratio for dominant/base labeling
+
+visibility:
+  min_report_frames: 5

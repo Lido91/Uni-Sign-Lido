@@ -1,0 +1,40 @@
+# SignSMD-2D stats-variant thresholds (contract signsmd2d_stats_v0_1).
+# All values are PER STEP of the trainer-aligned (linearly downsampled)
+# pose timeline. Positions in shoulder-width units; angles in DEGREES
+# (converted at realization time); face measures in interocular units.
+# min_change: smallest reported segment amplitude; static_threshold:
+# sliding-window std below which a step counts as static.
+# Heuristic initial values — calibrate on the train split only.
+# This file is hashed into every generation manifest.
+
+version: signsmd2d_stats_v0_1
+confidence_min: 0.3
+max_interp_frames: 3
+
+hands:
+  min_valid_points: 13     # compute_evidence dependency (same as coarse)
+
+stats:
+  smooth_window: 5
+  static_min_steps: 8      # shortest reportable hold
+  min_valid_run: 8         # shortest finite run worth segmenting
+  gap_report_min: 8        # shortest missing run reported as "not detected"
+  top_k: 0                 # 0 = all channels; K>0 keeps K most active
+                           # (hand separation is always kept)
+  channels:
+    separation:  {min_change: 0.30, static_threshold: 0.040}   # sw
+    wrist_x:     {min_change: 0.30, static_threshold: 0.040}   # sw
+    wrist_y:     {min_change: 0.30, static_threshold: 0.040}   # sw
+    elbow_bend:  {min_change: 20,   static_threshold: 5}       # deg
+    total_curl:  {min_change: 60,   static_threshold: 15}      # deg, hand level
+                                                               # (5-finger sum)
+    finger_curl: {min_change: 40,   static_threshold: 10}      # deg, per finger
+                                                               # (summed 3-joint
+                                                               # bend; <~51° ext,
+                                                               # >~126° closed)
+    spread:      {min_change: 10,   static_threshold: 3}       # deg
+    opposition:  {min_change: 0.50, static_threshold: 0.12}    # palm units
+    palm_cross:  {min_change: 0.50, static_threshold: 0.12}    # unitless
+    brow:        {min_change: 0.06, static_threshold: 0.015}   # interocular
+    mouth_open:  {min_change: 0.15, static_threshold: 0.045}   # interocular
+    tilt:        {min_change: 8,    static_threshold: 2.5}     # deg

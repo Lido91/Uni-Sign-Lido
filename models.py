@@ -3,13 +3,12 @@ import torch
 from torch import nn
 import torch.utils.checkpoint
 import contextlib
-import torchvision
-from einops import rearrange
 
 import math
 from stgcn_layers import Graph, get_stgcn_chain
-from deformable_attention_2d import DeformableAttention2D
-from transformers import MT5ForConditionalGeneration, T5Tokenizer 
+# torchvision / einops / deformable_attention_2d are imported lazily inside the
+# rgb_support branches, so the pose-only path does not depend on them
+from transformers import MT5ForConditionalGeneration, T5Tokenizer
 import warnings
 from config import mt5_path
 
@@ -97,8 +96,8 @@ class Uni_Sign(nn.Module):
         self.proj_linear['left'] = self.proj_linear['right']
 
         self.part_para = nn.Parameter(torch.zeros(hidden_dim*len(self.modes)))
-        self.pose_proj = nn.Linear(256*4, 768)
-        
+        self.pose_proj = nn.Linear(256*4, self.get_llm_hidden_size())
+
         self.apply(self._init_weights)
         
         if "CSL" in self.args.dataset:
@@ -107,6 +106,8 @@ class Uni_Sign(nn.Module):
             self.lang = 'English'
         
         if self.args.rgb_support:
+            import torchvision
+            from deformable_attention_2d import DeformableAttention2D
             self.rgb_support_backbone = torch.nn.Sequential(*list(torchvision.models.efficientnet_b0(pretrained=True).children())[:-2])
             self.rgb_proj = nn.Conv2d(1280, hidden_dim, kernel_size=1)
 
@@ -136,10 +137,16 @@ class Uni_Sign(nn.Module):
                     nn.init.constant_(layer.weight, 0)
                     nn.init.constant_(layer.bias, 0)
 
+        self._build_llm()
+
+    def get_llm_hidden_size(self):
+        return 768
+
+    def _build_llm(self):
         self.mt5_model = MT5ForConditionalGeneration.from_pretrained(mt5_path)
         self.mt5_tokenizer = T5Tokenizer.from_pretrained(mt5_path, legacy=False)
-    
-        
+        self.text_tokenizer = self.mt5_tokenizer
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
@@ -161,6 +168,7 @@ class Uni_Sign(nn.Module):
             return contextlib.nullcontext()
 
     def gather_feat_pose_rgb(self, gcn_feat, rgb_feat, indices, rgb_len, pose_init):
+        from einops import rearrange
         b, c, T, n = gcn_feat.shape
         assert rgb_feat.shape[0] == indices.shape[0]
         rgb_feat = self.rgb_proj(rgb_feat)
@@ -203,7 +211,7 @@ class Uni_Sign(nn.Module):
         assert start == rgb_feat.shape[0]
         return gcn_feat
 
-    def forward(self, src_input, tgt_input):
+    def encode_pose(self, src_input):
         # RGB branch forward
         if self.args.rgb_support:
             rgb_support_dict = {}
@@ -265,6 +273,10 @@ class Uni_Sign(nn.Module):
         # concat sub-pose feature across token dimension
         inputs_embeds = torch.cat(features, dim=-1) + self.part_para
         inputs_embeds = self.pose_proj(inputs_embeds)
+        return inputs_embeds
+
+    def forward(self, src_input, tgt_input):
+        inputs_embeds = self.encode_pose(src_input)
 
         prefix_token = self.mt5_tokenizer(
                                 [f"Translate sign language video to {self.lang}: "] * len(tgt_input["gt_sentence"]),
@@ -297,6 +309,8 @@ class Uni_Sign(nn.Module):
         label = labels.reshape(-1)
         out_logits = out['logits']
         logits = out_logits.reshape(-1,out_logits.shape[-1])
+        if getattr(self.args, 'compute_fp32_loss', False):
+            logits = logits.float()
         loss_fct = torch.nn.CrossEntropyLoss(label_smoothing=self.args.label_smoothing, ignore_index=-100)
         loss = loss_fct(logits, label.to(out_logits.device, non_blocking=True))
 
@@ -323,7 +337,7 @@ class Uni_Sign(nn.Module):
         return out
 
 def get_requires_grad_dict(model):
-    param_requires_grad = {name: True for name, param in model.named_parameters()}
+    param_requires_grad = {name: param.requires_grad for name, param in model.named_parameters()}
     param_requires_grad_right = {}
     for key in param_requires_grad.keys():
         if 'left' in key:
@@ -333,4 +347,3 @@ def get_requires_grad_dict(model):
     params_to_update = {k: v for k, v in model.state_dict().items() if param_requires_grad.get(k, True)}
 
     return params_to_update
-

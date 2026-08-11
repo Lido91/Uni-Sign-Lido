@@ -8,11 +8,18 @@ import random
 import numpy as np
 import copy
 import pickle
-from decord import VideoReader, cpu
 import json
 import pathlib
-from torchvision import transforms
+# decord / torchvision are imported lazily in the rgb_support path only
 from config import rgb_dirs, pose_dirs
+
+
+def build_rgb_transform():
+    from torchvision import transforms
+    return transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
 
 # load sub-pose
 def load_part_kp(skeletons, confs, force_ok=False):
@@ -323,6 +330,7 @@ def load_support_rgb_dict(tmp, skeletons, confs, full_path, data_transform):
 
 # use split rgb video for save time
 def load_video_support_rgb(path, tmp):
+    from decord import VideoReader, cpu
     vr = VideoReader(path, num_threads=1, ctx=cpu(0))
     
     vr.seek(0)
@@ -435,10 +443,21 @@ class S2T_Dataset(Base_Dataset):
 
         self.list = list(self.raw_data.keys())
 
-        self.data_transform = transforms.Compose([
-                                    transforms.ToTensor(),
-                                    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]), 
-                                    ])
+        pose_root_override = getattr(args, 'pose_root_override', '')
+        if pose_root_override:
+            self.pose_dir = pose_root_override.format(phase)
+            # Alternative pose sources (e.g. FK-projected poses) may not cover
+            # every label entry; keep only entries whose pickle exists
+            available = set(os.listdir(self.pose_dir))
+            kept = [k for k in self.list
+                    if self.raw_data[k]['video_path'].replace('.mp4', '.pkl')
+                    in available]
+            print(f"[{args.dataset}/{phase}] pose_root_override: "
+                  f"{self.pose_dir} -> {len(kept)}/{len(self.list)} samples "
+                  f"have a pose pickle")
+            self.list = kept
+
+        self.data_transform = build_rgb_transform() if self.rgb_support else None
 
     def __len__(self):
         return len(self.list)
@@ -519,10 +538,7 @@ class S2T_Dataset_news(Base_Dataset):
         else:
             raise NotImplementedError
         sum_sample = len(self.annotation)
-        self.data_transform = transforms.Compose([
-                                    transforms.ToTensor(),
-                                    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]), 
-                                    ])
+        self.data_transform = build_rgb_transform() if self.rgb_support else None
 
         if phase == 'train':
             self.start_idx = int(sum_sample * 0.0)
@@ -614,10 +630,7 @@ class S2T_Dataset_online(Base_Dataset):
         self.rgb_data = None
         self.pose_data = None
 
-        self.data_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ])
+        self.data_transform = build_rgb_transform() if self.rgb_support else None
 
     def __len__(self):
         return 1

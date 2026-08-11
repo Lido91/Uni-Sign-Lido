@@ -25,17 +25,23 @@ import pickle
 import gzip
 
 
-# global definition
-import deepspeed
+# global definition (deepspeed is optional: only the fine_tuning.py path needs it;
+# train_qwen.py runs on plain torch.distributed)
+try:
+    import deepspeed
+    import deepspeed.comm as dist
+    from deepspeed.accelerator import get_accelerator
+except Exception:
+    # ImportError, or deepspeed's own MissingCUDAException when CUDA_HOME is
+    # not set (e.g. the smd env has deepspeed installed but no CUDA toolkit)
+    deepspeed = None
+    import torch.distributed as dist
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 import argparse
 import torch.backends.cudnn as cudnn
-
-import deepspeed.comm as dist
-from deepspeed.accelerator import get_accelerator
 
 
 class SmoothedValue(object):
@@ -256,8 +262,11 @@ def init_distributed_mode(args):
     args.dist_backend = 'nccl'
     print('| distributed init (rank {}): {}'.format(
         args.rank, args.dist_url), flush=True)
+    # long timeout: rank 0 runs the (slow, beam-search) evaluation alone while
+    # the other ranks wait at a barrier
     torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
-                                         world_size=args.world_size, rank=args.rank)
+                                         world_size=args.world_size, rank=args.rank,
+                                         timeout=datetime.timedelta(hours=12))
     torch.distributed.barrier()
     setup_for_distributed(args.rank == 0)
 
@@ -456,6 +465,12 @@ def get_args_parser():
 
     # * Finetuning params
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
+    parser.add_argument('--pose_root_override', default='',
+                        help='Replace the config pose dir for S2T datasets; '
+                             'may contain a {} placeholder for the split, e.g. '
+                             "'/path/POSE_RTMPOSE2D_FK/{}'. Label entries "
+                             'without a matching .pkl are dropped (with a '
+                             'printed count) instead of crashing.')
 
     # * Optimizer parameters
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
@@ -483,8 +498,28 @@ def get_args_parser():
      # * Baise params
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
+    parser.add_argument(
+        '--save-last-only',
+        action='store_true',
+        help='Overwrite last_checkpoint.pth each epoch instead of retaining every epoch checkpoint.',
+    )
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
+    parser.add_argument(
+        '--skip_bleurt',
+        '--skip-bleurt',
+        dest='skip_bleurt',
+        action='store_true',
+        help='Skip BLEURT during How2Sign/OpenASL evaluation.',
+    )
+    parser.add_argument(
+        '--eval-on-how2sign-test',
+        action='store_true',
+        help=(
+            'Train on the selected dataset but evaluate and select the best checkpoint '
+            'directly on the How2Sign test split.'
+        ),
+    )
     parser.add_argument('--num_workers', default=8, type=int)
     parser.add_argument('--pin-mem', action='store_true',
                         help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
@@ -499,7 +534,7 @@ def get_args_parser():
     parser.add_argument('--dtype',
                         type=str,
                         default='bf16',
-                        choices=['fp16', 'bf16'],
+                        choices=['fp16', 'bf16', 'fp32'],
                         help='Training data type')
     parser.add_argument('--zero_stage',
                         type=int,
@@ -515,6 +550,19 @@ def get_args_parser():
                         type=int,
                         default=0,
                         help='save ckpt per quick_break step')
+
+    # non-finite loss handling
+    parser.add_argument('--skip_nonfinite_loss',
+                        action='store_true',
+                        help='When any rank computes a non-finite (inf/nan) loss, skip that '
+                             'step on ALL ranks together instead of aborting. The offending '
+                             'batch is still reported and dumped to the output dir.')
+    parser.add_argument('--nonfinite_streak_limit',
+                        default=5,
+                        type=int,
+                        help='With --skip_nonfinite_loss, abort anyway after this many '
+                             'CONSECUTIVE skipped steps (persistent non-finite loss means '
+                             'the weights have diverged and skipping only hides it).')
     
     # RGB branch
     parser.add_argument('--rgb_support', action='store_true',)
@@ -530,6 +578,16 @@ def get_args_parser():
     
     # select label smooth
     parser.add_argument("--label_smoothing", default=0.2, type=float)
+
+    # LLM backbone (mt5 = original encoder-decoder path, qwen = decoder-only + LoRA)
+    parser.add_argument("--llm_type", default="mt5", choices=["mt5", "qwen"])
+    parser.add_argument("--llm_path", default="", type=str,
+                        help="Override the LLM checkpoint dir (defaults to config.py mt5_path/qwen_path).")
+    parser.add_argument("--lora_rank", default=16, type=int)
+    parser.add_argument("--lora_alpha", default=32, type=int)
+    parser.add_argument("--lora_dropout", default=0.05, type=float)
+    parser.add_argument("--llm_grad_ckpt", action="store_true",
+                        help="Enable gradient checkpointing on the LLM (recommended for qwen).")
 
     # online inference
     parser.add_argument("--online_video", default="", type=str)

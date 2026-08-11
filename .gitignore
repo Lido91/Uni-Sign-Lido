@@ -1,6 +1,8 @@
 *.swp
 __pycache__/**
 out/
+*.zip
+data/
 core*
 *.ipynb
 # *.sh

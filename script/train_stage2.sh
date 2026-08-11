@@ -11,5 +11,5 @@ deepspeed --include localhost:0,1,2,3 --master_port 29511 pre_training.py \
    --quick_break 2048 \
    --output_dir $output_dir \
    --finetune $ckpt_path \
-   --dataset CSL_News \
-   --rgb_support
+   --dataset openasl \
+   # --rgb_support

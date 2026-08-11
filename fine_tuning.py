@@ -7,6 +7,7 @@ from datasets import S2T_Dataset
 import os
 import time
 import argparse, json, datetime
+import copy
 from pathlib import Path
 import math
 import sys
@@ -15,6 +16,21 @@ from models import get_requires_grad_dict
 from SLRT_metrics import translation_performance, islr_performance, wer_list
 from transformers import get_scheduler
 from config import *
+
+def move_src_input_to_device(src_input, model):
+    target_dtype = torch.float32
+    if model.bfloat16_enabled():
+        target_dtype = torch.bfloat16
+    elif model.fp16_enabled():
+        target_dtype = torch.float16
+
+    for key, value in src_input.items():
+        if not isinstance(value, torch.Tensor):
+            continue
+        if value.is_floating_point():
+            value = value.to(dtype=target_dtype)
+        src_input[key] = value.cuda(non_blocking=True)
+
 
 def main(args):
     utils.init_distributed_mode_ds(args)
@@ -35,9 +51,17 @@ def main(args):
                                  sampler=train_sampler, 
                                  pin_memory=args.pin_mem,
                                  drop_last=True)
-        
-    test_data = S2T_Dataset(path=test_label_paths[args.dataset], 
-                            args=args, phase='test')
+
+    eval_args = copy.copy(args)
+    if args.eval_on_how2sign_test:
+        eval_args.dataset = "How2Sign"
+        print(
+            "WARNING: evaluating directly on How2Sign test; "
+            "best_checkpoint.pth will be selected using How2Sign test metrics."
+        )
+
+    test_data = S2T_Dataset(path=test_label_paths[eval_args.dataset],
+                            args=eval_args, phase='test')
     print(test_data)
     # test_sampler = torch.utils.data.distributed.DistributedSampler(test_data,shuffle=False)
     test_sampler = torch.utils.data.SequentialSampler(test_data)
@@ -48,9 +72,10 @@ def main(args):
                                  sampler=test_sampler, 
                                  pin_memory=args.pin_mem)
 
-    if "How2Sign" not in args.dataset:
-        dev_data = S2T_Dataset(path=dev_label_paths[args.dataset],
-                               args=args, phase='dev')
+    has_distinct_dev = "How2Sign" not in eval_args.dataset
+    if has_distinct_dev:
+        dev_data = S2T_Dataset(path=dev_label_paths[eval_args.dataset],
+                               args=eval_args, phase='dev')
         print(dev_data)
         # dev_sampler = torch.utils.data.distributed.DistributedSampler(dev_data,shuffle=False)
         dev_sampler = torch.utils.data.SequentialSampler(dev_data)
@@ -62,9 +87,14 @@ def main(args):
                                     pin_memory=args.pin_mem)
     else:
         dev_dataloader = test_dataloader
+    selection_phase = 'dev' if has_distinct_dev else 'test'
 
     print(f"Creating model:")
-    model = Uni_Sign(args=args)
+    if args.llm_type == "qwen":
+        from models_qwen import Uni_Sign_Qwen
+        model = Uni_Sign_Qwen(args=args)
+    else:
+        model = Uni_Sign(args=args)
 
     model.cuda()
     model.train()
@@ -78,9 +108,12 @@ def main(args):
         print('***********************************')
         state_dict = torch.load(args.finetune, map_location='cpu')['model']
 
-        ret = model.load_state_dict(state_dict, strict=True)
-        print('Missing keys: \n', '\n'.join(ret.missing_keys))
-        print('Unexpected keys: \n', '\n'.join(ret.unexpected_keys))
+        # qwen checkpoints only contain trainable tensors (LoRA + pose encoder);
+        # the frozen base weights come from the HF checkpoint, so strict=False.
+        strict = args.llm_type == "mt5"
+        ret = model.load_state_dict(state_dict, strict=strict)
+        print(f'Missing keys ({len(ret.missing_keys)}): \n', '\n'.join(ret.missing_keys[:10]))
+        print(f'Unexpected keys ({len(ret.unexpected_keys)}): \n', '\n'.join(ret.unexpected_keys[:10]))
     
     model_without_ddp = model
     if args.distributed:
@@ -112,11 +145,11 @@ def main(args):
     
     if args.eval:
         if utils.is_main_process():
-            if args.task != "ISLR" and "How2Sign" not in args.dataset:
+            if args.task != "ISLR" and has_distinct_dev:
                 print("📄 dev result")
-                evaluate(args, dev_dataloader, model, model_without_ddp, phase='dev')
+                evaluate(eval_args, dev_dataloader, model, model_without_ddp, phase='dev')
             print("📄 test result")
-            evaluate(args, test_dataloader, model, model_without_ddp, phase='test')
+            evaluate(eval_args, test_dataloader, model, model_without_ddp, phase='test')
 
         return 
     print(f"Start training for {args.epochs} epochs")
@@ -128,7 +161,8 @@ def main(args):
         train_stats = train_one_epoch(args, model, train_dataloader, optimizer, epoch)
 
         if args.output_dir:
-            checkpoint_paths = [output_dir / f'checkpoint_{epoch}.pth']
+            checkpoint_name = 'last_checkpoint.pth' if args.save_last_only else f'checkpoint_{epoch}.pth'
+            checkpoint_paths = [output_dir / checkpoint_name]
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
                     'model': get_requires_grad_dict(model_without_ddp),
@@ -136,12 +170,19 @@ def main(args):
 
         # single gpu inference
         if utils.is_main_process():
-            test_stats = evaluate(args, dev_dataloader, model, model_without_ddp, phase='dev')
-            evaluate(args, test_dataloader, model, model_without_ddp, phase='test')
+            selection_stats = evaluate(
+                eval_args,
+                dev_dataloader,
+                model,
+                model_without_ddp,
+                phase=selection_phase,
+            )
+            if has_distinct_dev:
+                evaluate(eval_args, test_dataloader, model, model_without_ddp, phase='test')
 
             if args.task == "SLT":
-                if max_accuracy < test_stats["bleu4"]:
-                    max_accuracy = test_stats["bleu4"]
+                if max_accuracy < selection_stats["bleu4"]:
+                    max_accuracy = selection_stats["bleu4"]
                     if args.output_dir and utils.is_main_process():
                         checkpoint_paths = [output_dir / 'best_checkpoint.pth']
                         for checkpoint_path in checkpoint_paths:
@@ -149,12 +190,15 @@ def main(args):
                                 'model': get_requires_grad_dict(model_without_ddp),
                             }, checkpoint_path)
 
-                print(f"BLEU-4 of the network on the {len(dev_dataloader)} dev videos: {test_stats['bleu4']:.2f}")
+                print(
+                    f"BLEU-4 on {eval_args.dataset} {selection_phase} "
+                    f"({len(dev_dataloader)} batches): {selection_stats['bleu4']:.2f}"
+                )
                 print(f'Max BLEU-4: {max_accuracy:.2f}%')
             
             elif args.task == "ISLR":
-                if max_accuracy < test_stats["top1_acc_pi"]:
-                    max_accuracy = test_stats["top1_acc_pi"]
+                if max_accuracy < selection_stats["top1_acc_pi"]:
+                    max_accuracy = selection_stats["top1_acc_pi"]
                     if args.output_dir and utils.is_main_process():
                         checkpoint_paths = [output_dir / 'best_checkpoint.pth']
                         for checkpoint_path in checkpoint_paths:
@@ -162,12 +206,15 @@ def main(args):
                                 'model': get_requires_grad_dict(model_without_ddp),
                             }, checkpoint_path)
 
-                print(f"PI accuracy of the network on the {len(dev_dataloader)} dev videos: {test_stats['top1_acc_pi']:.2f}")
+                print(
+                    f"PI accuracy on {eval_args.dataset} {selection_phase} "
+                    f"({len(dev_dataloader)} batches): {selection_stats['top1_acc_pi']:.2f}"
+                )
                 print(f'Max PI accuracy: {max_accuracy:.2f}%')
             
             elif args.task == "CSLR":
-                if max_accuracy > test_stats["wer"]:
-                    max_accuracy = test_stats["wer"]
+                if max_accuracy > selection_stats["wer"]:
+                    max_accuracy = selection_stats["wer"]
                     if args.output_dir and utils.is_main_process():
                         checkpoint_paths = [output_dir / 'best_checkpoint.pth']
                         for checkpoint_path in checkpoint_paths:
@@ -175,11 +222,16 @@ def main(args):
                                 'model': get_requires_grad_dict(model_without_ddp),
                             }, checkpoint_path)
                             
-                print(f"WER of the network on the {len(dev_dataloader)} dev videos: {test_stats['wer']:.2f}")
+                print(
+                    f"WER on {eval_args.dataset} {selection_phase} "
+                    f"({len(dev_dataloader)} batches): {selection_stats['wer']:.2f}"
+                )
                 print(f'Min WER: {max_accuracy:.2f}%')
         
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                        **{f'test_{k}': v for k, v in test_stats.items()},
+                        **{f'test_{k}': v for k, v in selection_stats.items()},
+                        'eval_dataset': eval_args.dataset,
+                        'eval_split': selection_phase,
                         'epoch': epoch,
                         'n_parameters': n_parameters}
             
@@ -191,6 +243,96 @@ def main(args):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
 
+def _to_cpu(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.cpu()
+    if isinstance(obj, dict):
+        return {k: _to_cpu(v) for k, v in obj.items()}
+    return obj
+
+
+def _finite_report(d, prefix=""):
+    report = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            report.update(_finite_report(v, prefix=f"{prefix}{k}."))
+        elif isinstance(v, torch.Tensor) and v.is_floating_point():
+            report[prefix + k] = bool(torch.isfinite(v).all())
+    return report
+
+
+def handle_nonfinite_loss(args, loss_value, step, epoch, streak,
+                          src_input, tgt_input, extra=None):
+    """Cross-rank handling of a non-finite training loss.
+
+    EVERY rank must call this EVERY step (it issues a collective): a lone
+    rank skipping backward() would deadlock the others in the gradient
+    all-reduce. Returns 0 when all ranks are finite; otherwise the
+    incremented consecutive-skip count, and the caller must skip
+    backward/step for this batch. Aborts all ranks together when
+    --skip_nonfinite_loss is off, or after --nonfinite_streak_limit
+    consecutive skips (persistent non-finite loss = diverged weights)."""
+    local_bad = 0.0 if math.isfinite(loss_value) else 1.0
+    if torch.distributed.is_initialized():
+        bad_flag = torch.tensor(local_bad, device='cuda')
+        torch.distributed.all_reduce(bad_flag)
+        any_bad = bad_flag.item() > 0
+    else:
+        any_bad = local_bad > 0
+    if not any_bad:
+        return 0
+
+    streak += 1
+    if local_bad > 0:
+        finite_report = _finite_report({**src_input, **(extra or {})})
+        msg = (
+            "Loss is {} at rank={}, epoch={}, step={}, input_finite={}, "
+            "samples={}".format(
+                loss_value, utils.get_rank(), epoch, step, finite_report,
+                src_input.get('name_batch', [])
+            )
+        )
+        # setup_for_distributed suppresses print on non-master ranks,
+        # so also write straight to stderr to survive on any rank
+        print(msg)
+        sys.stderr.write(msg + "\n")
+        sys.stderr.flush()
+        dump_path = os.path.join(
+            args.output_dir or ".",
+            f"nonfinite_batch_rank{utils.get_rank()}.pt",
+        )
+        torch.save(
+            {
+                "src_input": _to_cpu(src_input),
+                "tgt_input": tgt_input,
+                "extra": _to_cpu(extra) if extra else None,
+                "loss": loss_value,
+                "step": step,
+                "epoch": epoch,
+            },
+            dump_path,
+        )
+        sys.stderr.write(f"offending batch saved to {dump_path}\n")
+
+    if not getattr(args, 'skip_nonfinite_loss', False):
+        sys.stderr.write(
+            f"rank={utils.get_rank()}: aborting on non-finite loss "
+            "(pass --skip_nonfinite_loss to skip such steps instead)\n"
+        )
+        sys.exit(1)
+    if streak >= args.nonfinite_streak_limit:
+        sys.stderr.write(
+            f"rank={utils.get_rank()}: {streak} consecutive non-finite steps "
+            "— weights have likely diverged, aborting\n"
+        )
+        sys.exit(1)
+    sys.stderr.write(
+        f"rank={utils.get_rank()}: skipping step {step} (consecutive "
+        f"non-finite: {streak}/{args.nonfinite_streak_limit})\n"
+    )
+    return streak
+
+
 def train_one_epoch(args, model, data_loader, optimizer, epoch):
     model.train()
 
@@ -200,29 +342,27 @@ def train_one_epoch(args, model, data_loader, optimizer, epoch):
     print_freq = 10
     optimizer.zero_grad()
 
-    target_dtype = None
-    if model.bfloat16_enabled():
-        target_dtype = torch.bfloat16
-
+    nonfinite_streak = 0
     for step, (src_input, tgt_input) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        if target_dtype != None:
-            for key in src_input.keys():
-                if isinstance(src_input[key], torch.Tensor):
-                    src_input[key] = src_input[key].to(target_dtype).cuda()
+        move_src_input_to_device(src_input, model)
 
         if args.task == "CSLR":
             tgt_input['gt_sentence'] = tgt_input['gt_gloss']
         stack_out = model(src_input, tgt_input)
-        
+
         total_loss = stack_out['loss']
+        loss_value = total_loss.item()
+
+        nonfinite_streak = handle_nonfinite_loss(
+            args, loss_value, step, epoch, nonfinite_streak,
+            src_input, tgt_input,
+        )
+        if nonfinite_streak:
+            continue
+
         model.backward(total_loss)
         model.step()
 
-        loss_value = total_loss.item()
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-            sys.exit(1)
-            
         metric_logger.update(loss=loss_value)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
@@ -238,20 +378,13 @@ def evaluate(args, data_loader, model, model_without_ddp, phase):
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test:'
 
-    target_dtype = None
-    if model.bfloat16_enabled():
-        target_dtype = torch.bfloat16
-        
     with torch.no_grad():
         tgt_pres = []
         tgt_refs = []
         tgt_name = []
  
         for step, (src_input, tgt_input) in enumerate(metric_logger.log_every(data_loader, 10, header)):
-            if target_dtype != None:
-                for key in src_input.keys():
-                    if isinstance(src_input[key], torch.Tensor):
-                        src_input[key] = src_input[key].to(target_dtype).cuda()
+            move_src_input_to_device(src_input, model)
             
             if args.task == "CSLR":
                 tgt_input['gt_sentence'] = tgt_input['gt_gloss']
@@ -270,7 +403,7 @@ def evaluate(args, data_loader, model, model_without_ddp, phase):
                 tgt_refs.append(tgt_input['gt_sentence'][i])
                 tgt_name.append(src_input['name_batch'][i])
 
-    tokenizer = model_without_ddp.mt5_tokenizer
+    tokenizer = model_without_ddp.text_tokenizer
     padding_value = tokenizer.eos_token_id
     
     pad_tensor = torch.ones(150-len(tgt_pres[0])).cuda() * padding_value
@@ -290,14 +423,17 @@ def evaluate(args, data_loader, model, model_without_ddp, phase):
             metric_logger.meters[k].update(v)
         metric_logger.meters['rouge'].update(rouge_score)
         if args.eval and (args.dataset == 'How2Sign' or args.dataset == 'OpenASL'):
-            # BLEURT # follow GloFE
-            # Due to the long processing time, only --eval will be executed.
-            from bleurt import score
-            checkpoint = "./BLEURT-20"
-            scorer = score.BleurtScorer(checkpoint)
-            scores_bleurt = scorer.score(references=tgt_refs[:], candidates=tgt_pres[:])
-            # assert isinstance(scores, list) and len(scores) == 1
-            print('BLEURT:', sum(scores_bleurt)/len(scores_bleurt))
+            if args.skip_bleurt:
+                print('BLEURT: skipped (--skip_bleurt)')
+            else:
+                # BLEURT # follow GloFE
+                # Due to the long processing time, only --eval will be executed.
+                from bleurt import score
+                checkpoint = "./BLEURT-20"
+                scorer = score.BleurtScorer(checkpoint)
+                scores_bleurt = scorer.score(references=tgt_refs[:], candidates=tgt_pres[:])
+                # assert isinstance(scores, list) and len(scores) == 1
+                print('BLEURT:', sum(scores_bleurt)/len(scores_bleurt))
 
     elif args.task == "ISLR":
         top1_acc_pi, top1_acc_pc = islr_performance(tgt_refs, tgt_pres)

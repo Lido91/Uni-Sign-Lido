@@ -1,0 +1,19 @@
+# Compact per-finger SignSMD contract. Geometry and segmentation thresholds
+# match the stats variant, but realization emits only ten finger-curl channels
+# and keeps at most two strongest non-static events per finger.
+
+version: signsmd2d_fingers_v0_1
+confidence_min: 0.3
+max_interp_frames: 3
+
+hands:
+  min_valid_points: 13
+
+stats:
+  smooth_window: 5
+  static_min_steps: 8
+  min_valid_run: 8
+  gap_report_min: 8
+  max_events_per_finger: 2
+  channels:
+    finger_curl: {min_change: 40, static_threshold: 10}

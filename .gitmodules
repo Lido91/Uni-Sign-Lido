@@ -1,0 +1,3 @@
+[submodule "Janus"]
+	path = Janus
+	url = https://github.com/deepseek-ai/Janus.git
