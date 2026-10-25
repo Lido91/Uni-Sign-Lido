@@ -172,14 +172,15 @@ class Uni_Sign_Unified(Uni_Sign):
         return (motion - self.motion_mean.to(motion.dtype)) \
             / self.motion_std.to(motion.dtype)
 
-    def motion_to_parts(self, motion, conf_value=1.0):
+    def motion_to_parts(self, motion, conf_value=1.0, clip_coordinates=True):
         """De-normalized ``[B,T,138]`` -> Uni-Sign part dict with conf channel.
 
         The layout follows pose2d_repr: a decoded sequence plus conf=1 obeys
         the exact schema the ST-GCN encoder consumes (back-translation).
         """
         joints = motion.reshape(*motion.shape[:-1], POSE2D_FEATURE_DIM // 2, 2)
-        joints = joints.clamp(-1.0, 1.0)
+        if clip_coordinates:
+            joints = joints.clamp(-1.0, 1.0)
         conf = torch.full_like(joints[..., :1], conf_value)
         packed = torch.cat([joints, conf], dim=-1)  # [B,T,69,3]
         parts = {}
@@ -338,11 +339,14 @@ class Uni_Sign_Unified(Uni_Sign):
         frame_lens,
         timesteps=9,
         cond_scale=3.0,
+        clip_coordinates=True,
     ):
         """Text -> pose parts via MAR masked generation + DDIM diffusion.
 
         sentences: list[str]; frame_lens: LongTensor [B] target frame counts
         (GT-length oracle, MoMADiff protocol).
+        clip_coordinates=False preserves raw decoded coordinates for MoMADiff
+        DTW evaluation; the default retains the existing SLT-input clipping.
         Returns (parts dict with conf=1, gen_frame_lens LongTensor [B]).
         """
         if self.eval_diffusion is None:
@@ -426,7 +430,7 @@ class Uni_Sign_Unified(Uni_Sign):
 
         motion = motion * self.motion_std.to(motion.dtype) \
             + self.motion_mean.to(motion.dtype)
-        parts = self.motion_to_parts(motion)
+        parts = self.motion_to_parts(motion, clip_coordinates=clip_coordinates)
 
         if was_training:
             self.train()

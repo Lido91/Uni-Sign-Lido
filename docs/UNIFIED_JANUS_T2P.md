@@ -1,6 +1,8 @@
 # Unified sign model: one mT5 for understanding AND generation
 
-JanusFlow/MotionGPT3-style unified architecture on Uni-Sign. The research
+Janus-inspired unified architecture on Uni-Sign, with MoMADiff-style
+masked latent generation. This is a sign-specific adaptation, not a
+reproduction of Janus, JanusFlow, or MotionGPT3. The research
 plan behind this doc lives at
 `~/.claude/plans/t5-janus-deep-seek-sunny-popcorn.md`; this file is the
 authoritative in-repo version.
@@ -9,7 +11,9 @@ authoritative in-repo version.
 
 - The ST-GCN → mT5 SLT path works well; the frozen-KL-VAE-as-understanding-
   encoder experiment plateaued at BLEU-4 ≈ 2 — reconstruction latents are
-  poor understanding features (Janus's core finding).
+  poor understanding features in that local experiment. Janus motivates
+  separating semantic understanding features from reconstruction features;
+  it does not establish this sign-specific BLEU result.
 - Janus resolution: decouple. The semantic encoder (ST-GCN ≙ SigLIP) serves
   understanding; the reconstruction autoencoder (KL-VAE ≙ SDXL-VAE) serves
   generation; ONE LLM hosts both.
@@ -35,9 +39,11 @@ T2P:  [T2P prompt+caption embeds ; latent slots] ─┘
 - Training (MoMADiff recipe): frozen encoder → `posterior.sample()` GT
   latents at per-sample true length (grouped; padding never crosses the
   non-causal convs) → cosine random masking → diffusion MSE on masked
-  positions only. Per-sample CFG dropout zeroes the text attention mask
-  (JanusFlow's uncond construction).
-- Inference: 9-step shrinking-mask MAR loop (`MaskGeneration`), CFG at the
+  positions only. Per-sample conditioning dropout zeroes the whole text
+  attention mask. JanusFlow's released sampler also masks caption attention,
+  but retains an initial token and mixes predicted velocities instead.
+- Inference: 9 mask states / 8 transitions in the shrinking-mask MAR loop
+  (`MaskGeneration`, empty transitions are skipped), guidance at the
   cond-vector level (`uncond + (cond−uncond)·scale`, guidance 3.0), DDIM-100
   per newly-unmasked token, grouped true-length decode.
 
@@ -56,7 +62,7 @@ T2P:  [T2P prompt+caption embeds ; latent slots] ─┘
 | `script/train_unified.sh` | `bash script/train_unified.sh 1|2|3|eval` |
 | `script/eval_backtrans.sh` | `bash script/eval_backtrans.sh ceilings|gen` |
 
-## Three training stages (JanusFlow recipe)
+## Three training stages (Janus-inspired adaptation)
 
 | Stage | Trainable | Frozen | Data / tasks |
 |---|---|---|---|
@@ -64,14 +70,87 @@ T2P:  [T2P prompt+caption embeds ; latent slots] ─┘
 | 2 Unified | + mT5 | ST-GCN, VAE | OpenASL, SLT+T2P mixed (one batch each per step, summed loss) |
 | 3 SFT | + ST-GCN | VAE only | How2Sign, SLT+T2P mixed |
 
-Checkpoints store everything except the VAE codec. `--slt_init` (a trained
-ST-GCN SLT checkpoint) must be passed in EVERY stage: it seeds mT5+ST-GCN,
-and frozen modules are excluded from `get_requires_grad_dict`-style saving
-only in the SLT baseline — here `unified_state_dict` keeps them, so stage
-N+1 needs only `--slt_init` + `--finetune stageN/best_checkpoint.pth`.
+Checkpoints store everything except VAE-owned weights and statistics.
+`--slt_init` seeds mT5+ST-GCN for the initial adaptation stage. Later stages
+can load the complete preceding unified checkpoint with `--finetune` alone:
+`unified_state_dict` also stores the frozen SLT weights. The checked runner
+still supplies `--slt_init` before `--finetune`; the latter overrides it.
+The checked runner currently initializes from a How2Sign-trained SLT model,
+so Stages 1/2 are not an OpenASL-only training history.
 
-Selection: stage 1 → min T2P val diffusion loss; stages 2/3 → SLT BLEU-4
-(dev where it exists, else test — inherited convention).
+Selection: stage 1 → min T2P validation diffusion loss; stages 2/3 → max
+SLT BLEU-4. As requested on 2026-10-13, new runs default to `--val_split test`
+for both directions on both datasets. `VAL_SPLIT=test` is also the default
+in `script/run_bidirectional_checked.sh`; `VAL_SPLIT=dev` explicitly restores
+dev selection for OpenASL. How2Sign has no configured dev labels and an
+explicit dev request fails rather than silently changing splits.
+
+Each epoch runs SLT loss plus beam-search BLEU-1/2/3/4 and ROUGE-L, then
+T2P diffusion loss and full text-to-pose generation on the same selected split.
+The generated poses are scored with the confidence-masked DTW-MPJPE2D port
+from SOKE/MoMADiff in `pose2d_metrics.py`. `--skip_slg_generation_val` disables
+only this generation pass for debugging; by default every sample is scored
+every epoch, using the configured MAR/DDIM/CFG settings and a fixed sampling
+seed. Sampling preserves the training RNG state. Rank 0 runs the raw model
+behind the existing distributed barriers. The extra generation pass adds
+validation time. Back-translation remains a separate `gen` evaluation;
+BLEURT runs only in explicit SLT evaluation mode, unless skipped.
+
+DTW protocol (identical cost/aggregation to the supplied SOKE/MoMADiff files):
+native, de-z-normalized xy coordinates; GT confidence > 0; drop GT frames
+without detected joints for the selected part; independent alignment for
+body/lhand/rhand/face/all. A sequence score is accumulated DTW cost WITHOUT
+dividing by path length. Dataset scores average these costs over evaluable
+sequences; hand = (mean lhand + mean rhand)/2. Hands and face use the existing
+wrist/anchor-local representation. DTW uses separate true generated/GT
+lengths, before any resampling for the SLT judge. Generated geometry is not
+additionally clipped for DTW; the SLT judge keeps its prior [-1,1] clipping.
+
+Each stage also saves `best_slg_checkpoint.pth` at the minimum
+`{dataset}_DTW_MPJPE2D_hand`. `best_checkpoint.pth` retains the original SLT
+BLEU-4 criterion in joint stages (diffusion loss in Stage 1). W&B includes
+keys such as `test/openasl_DTW_MPJPE2D_hand` and coverage counts. Resume
+preserves the best SLG score only when the saved split/sampling/codec protocol
+matches. The checked runner's `gen` mode defaults to the Stage-3 SLG-best
+checkpoint; `GEN_CHECKPOINT` can select another stage explicitly.
+
+Logs record `validation_split`, and split-qualified W&B keys such as
+`test/slt_bleu4` and `test/t2p_loss` distinguish them from older dev curves.
+Best-checkpoint metadata and full-state resume metadata also record the
+selection split. Switching dev/test on resume keeps weights and optimizer
+state but resets the best selection metric, so the two splits do not compete.
+If a run has already completed all epochs, a resumed invocation cannot
+reselect it on test without further evaluation/training; its existing best
+checkpoint still follows the original protocol. Existing running processes
+keep their loaded validation code until restarted.
+
+These are test-selected checkpoints: repeated selection on test uses that
+split for model selection. Report this setting when comparing published
+results; the scores are not independently held-out final-test estimates.
+
+## Fidelity to Janus and JanusFlow
+
+The common design is separate understanding/generation encoders with a
+shared language backbone and progressive unfreezing. Important differences:
+
+- Janus uses autoregressive discrete image tokens and cross-entropy for
+  generation. This implementation uses continuous KL-VAE latents and x0
+  diffusion MSE with masked latent slots.
+- JanusFlow predicts rectified-flow velocities, feeding the changing noisy
+  latent and timestep through its shared LLM at every Euler step. Here mT5
+  produces conditioning once per MAR transition, and the diffusion MLP
+  performs the subsequent denoising steps.
+- JanusFlow uses representation alignment (REPA). No REPA loss is implemented
+  here. Stage 1 here is T2P-only rather than both understanding/generation;
+  Stages 2/3 have no text-only replay or JanusFlow data-ratio schedule.
+- Guidance here extrapolates conditioning vectors before a nonlinear head.
+  It is not mathematically equivalent to JanusFlow's velocity-output CFG.
+- MotionGPT3 uses two modality streams sharing attention; this model uses
+  the same mT5 encoder parameters for both tasks.
+
+Primary references: [Janus](https://arxiv.org/abs/2410.13848),
+[JanusFlow](https://arxiv.org/html/2411.07975v1),
+[MotionGPT3](https://arxiv.org/html/2506.24086v2).
 
 ### Crash recovery (auto-resume, epoch granularity)
 
@@ -94,7 +173,10 @@ stage across restarts.
 Constraints: resume requires the SAME world size (ZeRO shards are
 per-rank); RNG streams and the partial epoch in flight are not restored
 (at most one epoch of work is lost). To restart a stage from scratch,
-delete its `resume_state/` and `wandb_run_id.txt` (or pass `--resume off`).
+pass `--resume off`, or `RESUME=off` to the checked runner. This skips old
+weights/optimizer recovery, starts a new W&B run, and writes new recovery
+snapshots into the same output directory. Same-named model checkpoints are
+overwritten as training progresses; existing epoch logs remain appended.
 
 ## Evaluation ladder (run `ceilings` BEFORE any training)
 
@@ -102,8 +184,8 @@ delete its `resume_state/` and `wandb_run_id.txt` (or pass `--resume off`).
 |---|---|---|
 | `gt` | judge BLEU ceiling on real poses | no |
 | `gt_conf1` | cost of conf=1 (generated poses carry no confidence) | no |
-| `vae_recon` | generation quality ceiling: encode→decode then back-translate; + MPJPE2D | no |
-| `gen` | text→pose back-translation BLEU + MPJPE2D (GT-length oracle) | yes |
+| `vae_recon` | encode→decode then back-translate; MPJPE2D + masked DTW-MPJPE2D | no |
+| `gen` | text→pose back-translation BLEU + MPJPE2D + masked DTW-MPJPE2D (GT-length oracle) | yes |
 
 Judge = frozen trained ST-GCN SLT checkpoint; sequences longer than 256
 frames are linearly resampled before judging (the judge never saw more).
@@ -153,3 +235,11 @@ bash script/eval_backtrans.sh gen      # T2P quality
 - Stage-1 T2P training with frozen mT5 relies on the encoder being a good
   frozen text/motion mixer; if stage-1 loss plateaus high, move faster to
   stage 2 (mT5 unfrozen) rather than extending stage 1.
+- The 2026-10-12 audit passed real CPU forward/backward contracts on one
+  OpenASL dev clip from `unified_stage2_openasl/checkpoint_1.pth`; see
+  `validation/audit_unified_pipeline.py` and `out/janus_contract_audit_20261012.json`.
+  This is a short execution check, not a full quality or distributed audit.
+- The active Stage 2 log contains extremely large finite SLT loss aggregate
+  values (about 1e26). The cause is unresolved; normal-looking dev results
+  do not prove those training spikes are harmless. Diagnose the offending
+  batch/rank and gradient behavior before using this run as an RL baseline.

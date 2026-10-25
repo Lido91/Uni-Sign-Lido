@@ -465,6 +465,9 @@ def get_args_parser():
 
     # * Finetuning params
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
+    parser.add_argument('--train_label_path', default='',
+                        help='Override the config train label file, e.g. '
+                             'labels.test to finetune on test-only poses')
     parser.add_argument('--pose_root_override', default='',
                         help='Replace the config pose dir for S2T datasets; '
                              'may contain a {} placeholder for the split, e.g. '

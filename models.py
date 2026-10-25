@@ -8,7 +8,7 @@ import math
 from stgcn_layers import Graph, get_stgcn_chain
 # torchvision / einops / deformable_attention_2d are imported lazily inside the
 # rgb_support branches, so the pose-only path does not depend on them
-from transformers import MT5ForConditionalGeneration, T5Tokenizer
+from transformers import MT5Config, MT5ForConditionalGeneration, T5Tokenizer
 import warnings
 from config import mt5_path
 
@@ -90,6 +90,7 @@ class Uni_Sign(nn.Module):
         for index, mode in enumerate(self.modes):
             self.gcn_modules[mode], final_dim = get_stgcn_chain(64, 'spatial', (1, spatial_kernel_size), A[index].clone(), True)
             self.fusion_gcn_modules[mode], _ = get_stgcn_chain(final_dim, 'temporal', (5, spatial_kernel_size), A[index].clone(), True)
+        self.pose_part_dim = final_dim
         
         self.gcn_modules['left'] = self.gcn_modules['right']
         self.fusion_gcn_modules['left'] = self.fusion_gcn_modules['right']
@@ -139,12 +140,33 @@ class Uni_Sign(nn.Module):
 
         self._build_llm()
 
+    def _llm_path(self):
+        return getattr(self.args, 'llm_path', '') or mt5_path
+
     def get_llm_hidden_size(self):
-        return 768
+        # Read only the config here: pose_proj is initialized before the full
+        # language-model weights are loaded.
+        return MT5Config.from_pretrained(self._llm_path()).d_model
 
     def _build_llm(self):
-        self.mt5_model = MT5ForConditionalGeneration.from_pretrained(mt5_path)
-        self.mt5_tokenizer = T5Tokenizer.from_pretrained(mt5_path, legacy=False)
+        path = self._llm_path()
+        dtype_map = {
+            'bf16': torch.bfloat16,
+            'fp16': torch.float16,
+            'fp32': torch.float32,
+        }
+        load_dtype = dtype_map.get(getattr(self.args, 'dtype', 'bf16'), torch.bfloat16)
+        self.mt5_model = MT5ForConditionalGeneration.from_pretrained(
+            path, torch_dtype=load_dtype
+        )
+        self.mt5_tokenizer = T5Tokenizer.from_pretrained(path, legacy=False)
+
+        if getattr(self.args, 'llm_grad_ckpt', False):
+            self.mt5_model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={'use_reentrant': False}
+            )
+            self.mt5_model.config.use_cache = False
+
         self.text_tokenizer = self.mt5_tokenizer
 
     def _init_weights(self, m):
@@ -211,7 +233,17 @@ class Uni_Sign(nn.Module):
         assert start == rgb_feat.shape[0]
         return gcn_feat
 
-    def encode_pose(self, src_input):
+    def _inject_part_text(self, part, gcn_feat, text_feat):
+        """Optional hook between spatial/body-anchor and temporal GCN.
+
+        The baseline never supplies ``text_feat`` and therefore retains its
+        exact path. Paired SignSMD subclasses override this hook.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement part-text injection"
+        )
+
+    def encode_pose(self, src_input, part_text_features=None):
         # RGB branch forward
         if self.args.rgb_support:
             rgb_support_dict = {}
@@ -264,7 +296,16 @@ class Uni_Sign(nn.Module):
 
                 else:
                     raise NotImplementedError
-            
+
+            if part_text_features is not None:
+                if part not in part_text_features:
+                    raise KeyError(
+                        f"part_text_features has no entry for {part!r}"
+                    )
+                gcn_feat = self._inject_part_text(
+                    part, gcn_feat, part_text_features[part]
+                )
+
             # temporal gcn forward
             gcn_feat = self.fusion_gcn_modules[part](gcn_feat) #B,C,T,V
             pool_feat = gcn_feat.mean(-1).transpose(1,2) #B,T,C

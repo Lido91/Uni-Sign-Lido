@@ -1,0 +1,68 @@
+Uni-Sign / SignJanus 手动运行命令（2026-10-14）
+
+先进入仓库并查看显存：
+cd /home/student/hwu/Workplace/Uni-Sign
+nvidia-smi
+
+下面所有增强训练都使用 GPU 1、2、3。确认这些卡可用后运行。
+推荐先运行 A，再运行 B。C、D 是其他实验路线，不需要全部运行。
+增强代码通过 28 项 CPU 检查；尚未执行完整 GPU / DeepSpeed 验证。
+
+A. 推荐：合并数据 + Geo-Sign 的短试跑（32 microbatches，约 2 次参数更新）
+GEOSIGN_GPUS=1,2,3 BATCH_SIZE=4 ACCUM_STEPS=16 \
+INIT_CHECKPOINT=/data/hwu/Uni_sign_repo/out/unified_stage1_openasl/best_checkpoint.pth \
+OUTPUT_DIR=out/smoke_merged_geosign \
+bash script/train_unified_merged_geosign.sh --smoke_steps 32 --wandb_run_name merged_geosign_smoke
+
+短试跑完成后自动退出，不评测、不保存训练 checkpoint；与正式训练目录分开。
+
+B. 推荐：从 Stage 1 warmup 开始，合并两数据集联合训练 40 epochs
+GEOSIGN_GPUS=1,2,3 BATCH_SIZE=4 ACCUM_STEPS=16 \
+INIT_CHECKPOINT=/data/hwu/Uni_sign_repo/out/unified_stage1_openasl/best_checkpoint.pth \
+OUTPUT_DIR=/data/hwu/Uni_sign_repo/out/unified_stage3_merged_geosign \
+bash script/train_unified_merged_geosign.sh
+
+输出：/data/hwu/Uni_sign_repo/out/unified_stage3_merged_geosign
+SLT + SLG + Geo-Sign，ST-GCN/mT5/生成/双曲模块训练，VAE 冻结。
+数据自然比例：OpenASL 96,476 + How2Sign 31,086 = 127,562。
+每卡 batch 4，累积 16，三卡有效 batch 192，W&B 开启。
+两套 test 分开评测，默认按 How2Sign BLEU-4 / hand DTW 选择 checkpoint。
+中断后用相同配置重复 B，从最近完成 epoch 的 resume_state 恢复。
+
+C. 备选：从当前最佳 Stage 3 模型继续做合并 + Geo-Sign 训练
+GEOSIGN_GPUS=1,2,3 BATCH_SIZE=4 ACCUM_STEPS=16 \
+INIT_CHECKPOINT=/data/hwu/Uni_sign_repo/out/unified_stage3_h2s/best_checkpoint.pth \
+OUTPUT_DIR=/data/hwu/Uni_sign_repo/out/unified_merged_geosign_from_stage3 \
+bash script/train_unified_merged_geosign.sh
+
+这是另一条初始化路线；新增双曲模块随机初始化，默认再训练 40 epochs。
+与 B 使用独立输出目录，便于区别实验。
+
+D. 备选：保留原两阶段数据安排，分别跑增强 Stage 2 / Stage 3
+先 OpenASL Stage 2，完成并产生 best_checkpoint 后，再跑 How2Sign Stage 3。
+
+GEOSIGN_GPUS=1,2,3 BATCH_SIZE=4 ACCUM_STEPS=16 MERGE_DATASETS=0 \
+INIT_CHECKPOINT=/data/hwu/Uni_sign_repo/out/unified_stage1_openasl/best_checkpoint.pth \
+OUTPUT_DIR=/data/hwu/Uni_sign_repo/out/unified_stage2_openasl_geosign \
+bash script/train_unified_stage2_geosign.sh
+
+GEOSIGN_GPUS=1,2,3 BATCH_SIZE=4 ACCUM_STEPS=16 MERGE_DATASETS=0 \
+INIT_CHECKPOINT=/data/hwu/Uni_sign_repo/out/unified_stage2_openasl_geosign/best_checkpoint.pth \
+OUTPUT_DIR=/data/hwu/Uni_sign_repo/out/unified_stage3_h2s_geosign \
+bash script/train_unified_stage3_geosign.sh
+
+各 40 epochs；输出目录与合并版、原版均分开。
+
+E. 原版 Stage 3：继续之前的 20-epoch 训练（不加 Geo-Sign）
+GPUS=1,2,3 BATCH_SIZE=8 bash script/train_unified_stage3.sh
+
+它自动恢复原 /data/hwu/Uni_sign_repo/out/unified_stage3_h2s/resume_state。
+如果原 20 epochs 已完成，重复命令不会再新增训练轮数。
+
+F. 原 Stage 2：生成 + 冻结 SLT 回译，保存动作结果
+GPU=1 bash script/eval_stage2_backtrans.sh gen
+
+默认评测 OpenASL test，加载 Stage 2 best_slg_checkpoint。
+输出：/data/hwu/Uni_sign_repo/out/unified_stage2_openasl/back_translation
+
+完整参数与实现说明：docs/GEOSIGN_UNIFIED_STAGE23.md

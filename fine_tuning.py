@@ -40,7 +40,7 @@ def main(args):
 
     print(f"Creating dataset:")
         
-    train_data = S2T_Dataset(path=train_label_paths[args.dataset], 
+    train_data = S2T_Dataset(path=args.train_label_path or train_label_paths[args.dataset],
                              args=args, phase='train')
     print(train_data)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_data,shuffle=True)
@@ -77,6 +77,12 @@ def main(args):
         dev_data = S2T_Dataset(path=dev_label_paths[eval_args.dataset],
                                args=eval_args, phase='dev')
         print(dev_data)
+        # pose_root_override sources (e.g. FK/generated poses) may have no
+        # dev clips -> select checkpoints on test instead
+        if len(dev_data) == 0:
+            print("WARNING: dev split is empty; selecting checkpoints on test.")
+            has_distinct_dev = False
+    if has_distinct_dev:
         # dev_sampler = torch.utils.data.distributed.DistributedSampler(dev_data,shuffle=False)
         dev_sampler = torch.utils.data.SequentialSampler(dev_data)
         dev_dataloader = DataLoader(dev_data,

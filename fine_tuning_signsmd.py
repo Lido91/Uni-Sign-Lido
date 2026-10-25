@@ -4,8 +4,8 @@ SignSMD structured description text.
 Same data pipeline, DeepSpeed infrastructure, BLEU-4 checkpoint selection,
 and generation as the original ``fine_tuning.py`` — the ONLY changes are:
 
-1. dataset: ``datasets_signsmd.S2T_Dataset_SignSMD`` additionally loads one
-   offline-compiled SignSMD description per sample;
+1. dataset: ``datasets_signsmd.S2T_Dataset_SignSMD`` loads either one flat
+   description or the four standalone part texts plus event JSON;
 2. model, selected by ``--fusion``:
    - ``early`` (default): ``models_signsmd.Uni_Sign_SignSMD`` prepends the
      description as real mT5 tokens ahead of the unchanged
@@ -13,13 +13,17 @@ and generation as the original ``fine_tuning.py`` — the ONLY changes are:
    - ``dual``: ``models_signsmd_dual.Uni_Sign_SignSMD_Dual`` encodes pose
      and description in separate passes of the shared encoder and fuses
      the hidden states (doc/signsmd_dual_stream_fusion_plan.md).
+   - ``paired``: ``models_signsmd_paired.Uni_Sign_SignSMD_Paired`` embeds
+     each short event phrase independently and injects it into the matching
+     pose part only over the event's trainer-aligned step span.
 
 With ``--fusion early`` or ``--fusion dual --fusion_gate none`` the fused
 model has EXACTLY the same parameters as the baseline ``models.Uni_Sign``
 (pose-only), so ``--finetune`` accepts baseline checkpoints with
 strict=True and these paths' checkpoints load back into the baseline the
-same way.  The gate variants (``--fusion_gate global|sample``) add
-smd_gate_* parameters and warm-start with strict=False.
+   same way.  The dual gate variants and paired model add parameters and
+   warm-start with strict=False; paired is functionally pose-only at step 0
+   because its final injection gate is exactly zero-initialized.
 
 Train (How2Sign, warm-started from a baseline checkpoint):
 
@@ -59,6 +63,7 @@ from fine_tuning import evaluate, train_one_epoch
 from models import get_requires_grad_dict
 from models_signsmd import Uni_Sign_SignSMD
 from models_signsmd_dual import Uni_Sign_SignSMD_Dual
+from models_signsmd_paired import Uni_Sign_SignSMD_Paired
 
 
 def get_signsmd_args_parser():
@@ -70,7 +75,33 @@ def get_signsmd_args_parser():
         "--signsmd_text_root",
         required=True,
         help="Directory of offline-compiled SignSMD descriptions, one "
-             "<clip-name>.txt per sample (clip-name = video_path minus .mp4).",
+             "<clip-name>.txt per sample for early/dual, or four "
+             "<part>/<clip-name>.txt files for paired fusion.",
+    )
+    parser.add_argument(
+        "--signsmd_event_root",
+        default="",
+        help="Paired only: directory containing <clip-name>.json event/span "
+             "contracts. Default: the events sibling of --signsmd_text_root.",
+    )
+    parser.add_argument(
+        "--eval_signsmd_text_root",
+        default="",
+        help="Optional SignSMD text root for a different evaluation dataset, "
+             "notably How2Sign under --eval-on-how2sign-test. Defaults to "
+             "--signsmd_text_root.",
+    )
+    parser.add_argument(
+        "--eval_signsmd_event_root",
+        default="",
+        help="Paired counterpart of --eval_signsmd_text_root. Defaults to "
+             "the training event root (or its derived events sibling).",
+    )
+    parser.add_argument(
+        "--events_required",
+        action="store_true",
+        help="Paired only: fail on any missing event JSON instead of using "
+             "an empty event list.",
     )
     parser.add_argument(
         "--signsmd_max_tokens",
@@ -78,6 +109,13 @@ def get_signsmd_args_parser():
         default=512,
         help="Hard cap on mT5 tokens for the description segment "
              "(tail-truncated; prefer compile-time compaction).",
+    )
+    parser.add_argument(
+        "--signsmd_part_max_tokens",
+        type=int,
+        default=128,
+        help="Paired only: independent token cap for EACH event phrase; "
+             "phrases and parts never share one truncation budget.",
     )
     parser.add_argument(
         "--signsmd_on_missing",
@@ -98,11 +136,12 @@ def get_signsmd_args_parser():
     parser.add_argument(
         "--fusion",
         default="early",
-        choices=["early", "dual"],
+        choices=["early", "dual", "paired"],
         help="early (default): SMD tokens concatenated with the pose input "
              "of a single encoder pass (models_signsmd); dual: pose and SMD "
              "encoded in separate passes of the shared encoder, fused at "
-             "the hidden-state level (models_signsmd_dual).",
+             "the hidden-state level (models_signsmd_dual); paired: event "
+             "phrases are injected into matching part/time pose features.",
     )
     parser.add_argument(
         "--fusion_alpha",
@@ -127,6 +166,19 @@ def get_signsmd_args_parser():
         help="dual only: per-sample probability of zeroing the SMD "
              "segment's attention mask during training (blocks the "
              "SMD->translation shortcut).",
+    )
+    parser.add_argument(
+        "--text_event_dropout",
+        type=float,
+        default=0.3,
+        help="Paired only: per-sample probability of dropping all part-text "
+             "events during training (default 0.3).",
+    )
+    parser.add_argument(
+        "--eval_mask_text",
+        action="store_true",
+        help="Paired only, with --eval: zero all event features to measure "
+             "the integrity of the pose-only path.",
     )
     parser.add_argument(
         "--eval_mask_smd",
@@ -157,6 +209,8 @@ def validate_args(args):
         )
     if args.signsmd_max_tokens < 1:
         raise ValueError("--signsmd_max_tokens must be >= 1")
+    if args.signsmd_part_max_tokens < 1:
+        raise ValueError("--signsmd_part_max_tokens must be >= 1")
     if args.fusion == "dual":
         if not 0.0 <= args.smd_dropout < 1.0:
             raise ValueError("--smd_dropout must be in [0, 1)")
@@ -170,16 +224,59 @@ def validate_args(args):
                 "--eval_mask_smd is an evaluation-time diagnostic; "
                 "combine it with --eval"
             )
-    elif (
-        args.fusion_alpha != 1.0
-        or args.fusion_gate != "none"
-        or args.smd_dropout != 0.0
-        or args.eval_mask_smd
-    ):
-        raise ValueError(
-            "--fusion_alpha/--fusion_gate/--smd_dropout/--eval_mask_smd "
-            "require --fusion dual"
-        )
+        if (
+            args.eval_mask_text
+            or args.events_required
+            or args.signsmd_event_root
+            or args.eval_signsmd_event_root
+        ):
+            raise ValueError(
+                "paired event flags require --fusion paired"
+            )
+    elif args.fusion == "paired":
+        if (
+            args.fusion_alpha != 1.0
+            or args.fusion_gate != "none"
+            or args.smd_dropout != 0.0
+            or args.eval_mask_smd
+        ):
+            raise ValueError(
+                "--fusion_alpha/--fusion_gate/--smd_dropout/--eval_mask_smd "
+                "require --fusion dual"
+            )
+        if args.frame_sampling != "linear":
+            raise ValueError(
+                "--fusion paired requires --frame_sampling linear so event "
+                "spans index the pose sequence exactly"
+            )
+        if not 0.0 <= args.text_event_dropout <= 1.0:
+            raise ValueError("--text_event_dropout must be in [0, 1]")
+        if args.eval_mask_text and not args.eval:
+            raise ValueError(
+                "--eval_mask_text is an evaluation-time diagnostic; "
+                "combine it with --eval"
+            )
+    else:
+        if (
+            args.fusion_alpha != 1.0
+            or args.fusion_gate != "none"
+            or args.smd_dropout != 0.0
+            or args.eval_mask_smd
+        ):
+            raise ValueError(
+                "--fusion_alpha/--fusion_gate/--smd_dropout/--eval_mask_smd "
+                "require --fusion dual"
+            )
+        if (
+            args.eval_mask_text
+            or args.events_required
+            or args.signsmd_event_root
+            or args.eval_signsmd_event_root
+        ):
+            raise ValueError(
+                "event roots/--events_required/--eval_mask_text require "
+                "--fusion paired"
+            )
 
 
 def main(args):
@@ -208,6 +305,21 @@ def main(args):
     eval_args = copy.copy(args)
     if args.eval_on_how2sign_test:
         eval_args.dataset = "How2Sign"
+        if args.eval_signsmd_text_root:
+            eval_args.signsmd_text_root = args.eval_signsmd_text_root
+        elif args.dataset != "How2Sign":
+            raise ValueError(
+                "--eval-on-how2sign-test changes the dataset from "
+                f"{args.dataset} to How2Sign; pass "
+                "--eval_signsmd_text_root for the How2Sign corpus"
+            )
+        if args.eval_signsmd_event_root:
+            eval_args.signsmd_event_root = args.eval_signsmd_event_root
+        elif args.fusion == "paired" and args.dataset != "How2Sign":
+            raise ValueError(
+                "--fusion paired with --eval-on-how2sign-test requires "
+                "--eval_signsmd_event_root for the How2Sign event corpus"
+            )
         print(
             "WARNING: evaluating directly on How2Sign test; "
             "best_checkpoint.pth will be selected using How2Sign test metrics."
@@ -247,6 +359,8 @@ def main(args):
     print(f"Creating SignSMD fusion model ({args.fusion}):")
     if args.fusion == "dual":
         model = Uni_Sign_SignSMD_Dual(args=args)
+    elif args.fusion == "paired":
+        model = Uni_Sign_SignSMD_Paired(args=args)
     else:
         model = Uni_Sign_SignSMD(args=args)
     model.cuda()
@@ -260,10 +374,12 @@ def main(args):
         print("Load Checkpoint...")
         print("***********************************")
         state_dict = torch.load(args.finetune, map_location="cpu")["model"]
-        # early fusion and gate-free dual fusion have exactly the baseline
-        # parameter set, so baseline checkpoints load like in fine_tuning.py;
-        # gate variants add smd_gate_* params -> strict=False warm start
-        strict = args.fusion == "early" or args.fusion_gate == "none"
+        # Early and gate-free dual fusion have exactly the baseline parameter
+        # set. Paired always adds text projection/gate parameters and therefore
+        # warm-starts baseline or earlier paired checkpoints with strict=False.
+        strict = args.fusion == "early" or (
+            args.fusion == "dual" and args.fusion_gate == "none"
+        )
         ret = model.load_state_dict(state_dict, strict=strict)
         print(f"Missing keys ({len(ret.missing_keys)}): \n",
               "\n".join(ret.missing_keys[:10]))

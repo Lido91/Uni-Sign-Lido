@@ -21,10 +21,11 @@ import yaml
 from .evidence import compute_evidence
 from .realization import realize
 from .realization_fingers import realize_fingers
+from .realization_parts import realize_parts
 from .realization_stats import realize_stats
 from .segmentation import segment
 
-VARIANTS = ("coarse", "fingers", "stats")
+VARIANTS = ("coarse", "fingers", "stats", "parts")
 
 # Depth or contact claims that 2D image geometry cannot support.
 BANNED_PATTERN = re.compile(
@@ -95,6 +96,9 @@ def compile_clip(pose, cfg, fps, variant="coarse", max_length=256):
     scores = scores[idx]
 
     evidence = compute_evidence(keypoints, scores, cfg)
+    events = None
+    intervals_per_part = None
+    part_texts = None
     if variant == "stats":
         text = realize_stats(evidence, cfg, fps, orig_num_frames=orig_frames)
         num_intervals = None
@@ -103,6 +107,19 @@ def compile_clip(pose, cfg, fps, variant="coarse", max_length=256):
             evidence, cfg, fps, orig_num_frames=orig_frames,
         )
         num_intervals = None
+    elif variant == "parts":
+        part_texts, events, intervals_per_part = realize_parts(
+            evidence, cfg, fps, orig_num_frames=orig_frames,
+        )
+        text = None
+        num_intervals = None
+        num_steps = int(len(idx))
+        for event in events:
+            if not 0 <= event["start"] <= event["end"] < num_steps:
+                raise AssertionError(
+                    f"event span [{event['start']}, {event['end']}] outside "
+                    f"[0, {num_steps}) for part {event['part']!r}"
+                )
     else:
         intervals, signals = segment(evidence, cfg)
         text = realize(
@@ -110,10 +127,20 @@ def compile_clip(pose, cfg, fps, variant="coarse", max_length=256):
             orig_num_frames=orig_frames,
         )
         num_intervals = len(intervals)
-    assert_clean(text)
+    if part_texts is not None:
+        for part, part_text in part_texts.items():
+            try:
+                assert_clean(part_text)
+            except AssertionError as exc:
+                raise AssertionError(f"part {part!r}: {exc}") from exc
+    else:
+        assert_clean(text)
     return {
         "text": text,
         "num_frames": orig_frames,
         "num_steps": int(len(idx)),
         "num_intervals": num_intervals,
+        "events": events,
+        "intervals_per_part": intervals_per_part,
+        "part_texts": part_texts,
     }

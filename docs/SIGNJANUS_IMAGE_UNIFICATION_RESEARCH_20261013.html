@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SignJanus · 统一理解与生成论文地图</title>
+<style>
+:root{color-scheme:light;--ink:#172e44;--muted:#607489;--line:#dce4eb;--blue:#125dcc}*{box-sizing:border-box}body{margin:0;background:#f3f6fa;color:var(--ink);font:15px/1.65 system-ui,-apple-system,"Noto Sans SC",sans-serif}main{max-width:1420px;margin:auto;padding:32px 24px 70px}h1{font-size:29px;line-height:1.3;margin:9px 0 15px}h2{font-size:20px;margin:0 0 12px}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}p{margin:9px 0}.eyebrow{letter-spacing:.08em;font-size:12px;color:var(--muted)}.lead{max-width:1000px}.cards{display:flex;gap:14px;flex-wrap:wrap;margin:24px 0}.card{background:white;border:1px solid var(--line);border-radius:12px;padding:15px 22px;min-width:145px}.number{font-size:29px;font-weight:750;display:block}.muted,small{color:var(--muted)}small{display:block;margin-top:6px;font-size:12px}.panel{padding:22px;background:#fff;border:1px solid var(--line);border-radius:14px;margin:18px 0}.lanes{display:grid;grid-template-columns:1fr 1fr;gap:14px}.lane{border-radius:9px;padding:14px 17px;background:#edf4fd}.lane.teacher{background:#ecf6f1}.lane b{display:block}.comparison{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px}.comparison p{margin:0}.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin:16px 0}label{font-size:13px;color:var(--muted);display:grid;gap:4px}input,select,button{font:inherit;border:1px solid #cbd8e4;border-radius:7px;background:white;padding:8px 10px;color:var(--ink)}input{width:300px}button{cursor:pointer}.count{color:var(--muted);font-size:13px;margin:10px 0}.scroll{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:12px}table{border-collapse:collapse;width:100%;min-width:1030px}th,td{text-align:left;vertical-align:top;padding:15px 13px;border-bottom:1px solid #e8edf2}th{background:#eaf0f7;font-size:13px;white-space:nowrap}td:nth-child(2){width:33%}td:nth-child(5){width:27%}td:nth-child(3){white-space:nowrap;font-size:13px}.badge{display:inline-block;background:#edf0f4;border-radius:6px;padding:3px 8px;font-size:12px;font-weight:700;white-space:nowrap}.p0{background:#dfeee3;color:#196a37}.p1{background:#e3edff;color:#235ca9}details{margin-top:10px;font-size:13px}summary{cursor:pointer;color:#456382}details p{margin:9px 0}.footer{margin-top:20px;color:var(--muted);max-width:1120px;font-size:13px}[hidden]{display:none!important}@media(max-width:700px){main{padding:22px 12px}.lanes,.comparison{grid-template-columns:1fr}input{width:100%}.controls label:first-child{width:100%}h1{font-size:24px}}
+</style></head><body><main>
+<div class="eyebrow">RESEARCH SNAPSHOT · 2026-10-13</div><h1>SignJanus：统一理解与生成的论文地图</h1>
+<p class="lead">从图像模型中寻找能接入当前 ST-GCN＋共享 mT5＋MAR/DDIM 的方法。作者机制与手语迁移提案分开记录；成本是代码改动的定性判断。研究未改训练实现，未启动训练。</p>
+<p><a href="SIGNJANUS_IMAGE_UNIFICATION_RESEARCH_20261013.txt">完整研究报告</a> · <a href="SIGNJANUS_IMAGE_UNIFICATION_RESEARCH_20261013.json">结构化论文清单</a></p>
+<div class="cards"><div class="card"><span class="number">70</span>核对原始页面</div><div class="card"><span class="number">23</span>2026 年首次提交</div><div class="card"><span class="number">17</span>核查方法章节</div><div class="card"><span class="number">9</span>P0 优先候选</div></div>
+<section class="panel"><h2>REPA 可以直接作为下一项监督实验</h2><div class="lanes"><div class="lane teacher"><b>冻结教师：原始 GT pose → ST-GCN</b>逐帧语义特征 → 对齐到每 4 帧一个 latent 的时间轴 → stop-gradient 目标。</div><div class="lane"><b>可训练学生：带噪 latent＋时间＋文本条件 → 扩散 MLP</b>中间 hidden → 新投影头 → 有效且受监督位置的 cosine 对齐。</div></div><p>保留当前 x0 扩散、DDIM 与 VAE；推理时不运行教师。只对齐 mT5 条件可作为另一项消融，应与带噪中间特征 REPA 区分。</p>
+<div class="comparison"><p><b>当前 SignJanus：</b>mT5 先产生条件，独立 MLP 在内层去噪；外层 MAR 分批补全。</p><p><b>原版 JanusFlow：</b>每个 flow 步骤将带噪 latent 输入共享 LLM，再预测速度并作 Euler 更新。</p></div></section>
+<section class="panel"><h2>建议先后次序</h2><p>校准冻结 SLT 奖励 → REPA／RecA → Diffusion-DPO 对照 → 连续在线 RL 或重新推导 NFT → UniMRG 式反向辅助监督。</p><p class="muted">大规模 codec 重训、MoT、原生 flow、多轮反思需要更大改造。SLT 和 SLG 同时存在，不等于已经证明双向增益。</p></section>
+<div class="controls"><label>关键词<input id="search" type="search" placeholder="例如 REPA、手部、logprob、mT5"></label><label>优先级<select id="priority"><option value="">全部</option><option>P0</option><option>P1</option><option>P2</option><option>必读</option><option>背景</option></select></label><label>首次提交<select id="year"><option value="">全部年份</option><option value="2026">2026</option><option value="2025">2025</option><option value="2024">2024</option><option value="2023">2023</option></select></label><label>研究方向<select id="family"><option value="">全部方向</option><option>奖励闭环</option><option>对齐</option><option>推理修复</option><option>架构</option><option>表示</option><option>训练</option><option>评估</option><option>连续生成RL</option></select></label><label>排序<select id="sort"><option value="priority">优先级</option><option value="recent">最新优先</option></select></label><button id="reset" type="button">重置</button></div>
+<div class="count" id="count" aria-live="polite">显示 70 / 70 篇 · 点击论文名打开原文，展开细节查看迁移判断</div>
+<div class="scroll"><table><thead><tr><th>优先级</th><th>论文与阅读深度</th><th>首次提交</th><th>方向</th><th>SignJanus 迁移提案</th><th>改动成本</th></tr></thead><tbody id="body"><tr class="paper" data-priority="P0" data-year="2026" data-family="奖励闭环" data-date="2026-07-13" data-search="read it back: pretrained mllms are zero-shot reward models for text-to-image generation readitback 奖励闭环 冻结 mllm，一次 teacher-forced forward 的平均 prompt log-likelihood 作 reward。 使用冻结 slt 快照计算完整 caption 的平均 logprob，先做候选排序。 当前 forward 只返回平滑 ce；必须直接获取未平滑 token logits。">
+<td><span class="badge p0">P0</span></td>
+<td><a href="https://arxiv.org/abs/2607.11886" target="_blank" rel="noopener">Read It Back: Pretrained MLLMs Are Zero-Shot Reward Models for Text-to-Image Generation</a><small>2607.11886 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>冻结 MLLM，一次 teacher-forced forward 的平均 prompt log-likelihood 作 reward。</p><p><b>本项目提案：</b>使用冻结 SLT 快照计算完整 caption 的平均 logprob，先做候选排序。</p><p><b>限制：</b>当前 forward 只返回平滑 CE；必须直接获取未平滑 token logits。</p><p><b>日期记录：</b>13 Jul 2026</p><p><b>代码：</b><a href="https://github.com/huangrh99/AlphaGRPO" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2026-07-13</td><td>奖励闭环</td><td>使用冻结 SLT 快照计算完整 caption 的平均 logprob，先做候选排序。</td><td>低到中</td></tr>
+<tr class="paper" data-priority="P0" data-year="2026" data-family="奖励闭环" data-date="2026-03-06" data-search="learning to generate via understanding: understanding-driven intrinsic rewarding for unified multimodal models gvu 奖励闭环 利用理解分支对原始文本的 token 概率给生成结果奖励。 生成 pose 经冻结 slt 教师，计算原句的 teacher-forced 概率。 奖励实现便宜，完整生成 rl 仍需要连续扩散优化器。">
+<td><span class="badge p0">P0</span></td>
+<td><a href="https://arxiv.org/abs/2603.06043" target="_blank" rel="noopener">Learning to Generate via Understanding: Understanding-Driven Intrinsic Rewarding for Unified Multimodal Models</a><small>2603.06043 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>利用理解分支对原始文本的 token 概率给生成结果奖励。</p><p><b>本项目提案：</b>生成 pose 经冻结 SLT 教师，计算原句的 teacher-forced 概率。</p><p><b>限制：</b>奖励实现便宜，完整生成 RL 仍需要连续扩散优化器。</p><p><b>日期记录：</b>6 Mar 2026</p><p><b>代码：</b><a href="https://github.com/matrix0721/GvU" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2026-03-06</td><td>奖励闭环</td><td>生成 pose 经冻结 SLT 教师，计算原句的 teacher-forced 概率。</td><td>低到中</td></tr>
+<tr class="paper" data-priority="P0" data-year="2026" data-family="对齐" data-date="2026-01-29" data-search="generation enhances understanding in unified multimodal models via multi-representation generation reag 对齐 辅助生成重建、深度与分割等表示以改善理解。 移植为 pose 重建、速度、骨方向、手部结构辅助任务，检验 slg→slt。 手语衍生任务是新提案；从 2d 坐标不能得到真实 3d 深度。">
+<td><span class="badge p0">P0</span></td>
+<td><a href="https://arxiv.org/abs/2601.21406" target="_blank" rel="noopener">Generation Enhances Understanding in Unified Multimodal Models via Multi-Representation Generation</a><small>2601.21406 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>辅助生成重建、深度与分割等表示以改善理解。</p><p><b>本项目提案：</b>移植为 pose 重建、速度、骨方向、手部结构辅助任务，检验 SLG→SLT。</p><p><b>限制：</b>手语衍生任务是新提案；从 2D 坐标不能得到真实 3D 深度。</p><p><b>日期记录：</b>29 Jan 2026 ( ), last revised 25 May 2026 (this version, v3)</p><p><b>代码：</b><a href="https://github.com/Sugewud/UniMRG" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2026-01-29</td><td>对齐</td><td>移植为 pose 重建、速度、骨方向、手部结构辅助任务，检验 SLG→SLT。</td><td>中</td></tr>
+<tr class="paper" data-priority="P0" data-year="2025" data-family="对齐" data-date="2025-09-08" data-search="reconstruction alignment improves unified multimodal models reca 对齐 用理解编码器的 dense embeddings 作条件，重建输入，保持理解能力。 加入 pose→slt语义→pose 的自监督条件重建，保留真实 slt 回放。 监督重建不等于 rl；推理文本生成仍需保持，不可只学复制 pose。">
+<td><span class="badge p0">P0</span></td>
+<td><a href="https://arxiv.org/abs/2509.07295" target="_blank" rel="noopener">Reconstruction Alignment Improves Unified Multimodal Models</a><small>2509.07295 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>用理解编码器的 dense embeddings 作条件，重建输入，保持理解能力。</p><p><b>本项目提案：</b>加入 pose→SLT语义→pose 的自监督条件重建，保留真实 SLT 回放。</p><p><b>限制：</b>监督重建不等于 RL；推理文本生成仍需保持，不可只学复制 pose。</p><p><b>日期记录：</b>8 Sep 2025 ( ), last revised 25 Jun 2026 (this version, v4)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-09-08</td><td>对齐</td><td>加入 pose→SLT语义→pose 的自监督条件重建，保留真实 SLT 回放。</td><td>中</td></tr>
+<tr class="paper" data-priority="P0" data-year="2025" data-family="连续生成RL" data-date="2025-05-12" data-search="dancegrpo: unleashing grpo on visual generation dancegrpo 连续生成rl 对连续扩散和 flow 进行分组策略优化。 当前扩散策略 rl 的核心参考，与 ddpo 一起建立可计算转移 likelihood。 eta=0 ddim 不能直接提供非退化的逐步 gaussian 概率。">
+<td><span class="badge p0">P0</span></td>
+<td><a href="https://arxiv.org/abs/2505.07818" target="_blank" rel="noopener">DanceGRPO: Unleashing GRPO on Visual Generation</a><small>2505.07818 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>对连续扩散和 flow 进行分组策略优化。</p><p><b>本项目提案：</b>当前扩散策略 RL 的核心参考，与 DDPO 一起建立可计算转移 likelihood。</p><p><b>限制：</b>eta=0 DDIM 不能直接提供非退化的逐步 Gaussian 概率。</p><p><b>日期记录：</b>12 May 2025 ( ), last revised 28 Aug 2025 (this version, v4)</p><p><b>代码：</b><a href="https://github.com/XueZeyue/DanceGRPO" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2025-05-12</td><td>连续生成RL</td><td>当前扩散策略 RL 的核心参考，与 DDPO 一起建立可计算转移 likelihood。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P0" data-year="2024" data-family="对齐" data-date="2024-11-12" data-search="janusflow: harmonizing autoregression and rectified flow for unified multimodal understanding and generation janusflow 对齐 分离视觉编码，并将生成中间特征对齐到理解编码器。 从扩散 mlp 或生成条件特征接投影头，对齐冻结 slt 的时间特征。 当前 mt5 不直接处理带噪 latent；属于 repa 思路移植。">
+<td><span class="badge p0">P0</span></td>
+<td><a href="https://arxiv.org/abs/2411.07975" target="_blank" rel="noopener">JanusFlow: Harmonizing Autoregression and Rectified Flow for Unified Multimodal Understanding and Generation</a><small>2411.07975 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>分离视觉编码，并将生成中间特征对齐到理解编码器。</p><p><b>本项目提案：</b>从扩散 MLP 或生成条件特征接投影头，对齐冻结 SLT 的时间特征。</p><p><b>限制：</b>当前 mT5 不直接处理带噪 latent；属于 REPA 思路移植。</p><p><b>日期记录：</b>12 Nov 2024 ( ), last revised 24 Mar 2025 (this version, v2)</p><p><b>代码：</b><a href="https://github.com/deepseek-ai/Janus" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2024-11-12</td><td>对齐</td><td>从扩散 MLP 或生成条件特征接投影头，对齐冻结 SLT 的时间特征。</td><td>中</td></tr>
+<tr class="paper" data-priority="P0" data-year="2024" data-family="对齐" data-date="2024-10-09" data-search="representation alignment for generation: training diffusion transformers is easier than you think repa 对齐 生成网络中间特征对齐冻结的预训练语义特征。 冻结 slt 教师，向生成 mlp 添加投影及有效时间位置的对齐损失。 时间、部位粒度与 confidence mask 必须匹配。">
+<td><span class="badge p0">P0</span></td>
+<td><a href="https://arxiv.org/abs/2410.06940" target="_blank" rel="noopener">Representation Alignment for Generation: Training Diffusion Transformers Is Easier Than You Think</a><small>2410.06940 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>生成网络中间特征对齐冻结的预训练语义特征。</p><p><b>本项目提案：</b>冻结 SLT 教师，向生成 MLP 添加投影及有效时间位置的对齐损失。</p><p><b>限制：</b>时间、部位粒度与 confidence mask 必须匹配。</p><p><b>日期记录：</b>9 Oct 2024 ( ), last revised 18 Jun 2025 (this version, v4)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2024-10-09</td><td>对齐</td><td>冻结 SLT 教师，向生成 MLP 添加投影及有效时间位置的对齐损失。</td><td>中</td></tr>
+<tr class="paper" data-priority="P0" data-year="2023" data-family="连续生成RL" data-date="2023-11-21" data-search="diffusion model alignment using direct preference optimization diffusiondpo 连续生成rl 使用扩散 likelihood 的变分近似构建偏好优化目标。 用冻结 slt 与手部 dtw 排序生成对，做离线扩散偏好训练。 是偏好优化基线，不应与在线 grpo 混称；mar 条件需一致。">
+<td><span class="badge p0">P0</span></td>
+<td><a href="https://arxiv.org/abs/2311.12908" target="_blank" rel="noopener">Diffusion Model Alignment Using Direct Preference Optimization</a><small>2311.12908 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>使用扩散 likelihood 的变分近似构建偏好优化目标。</p><p><b>本项目提案：</b>用冻结 SLT 与手部 DTW 排序生成对，做离线扩散偏好训练。</p><p><b>限制：</b>是偏好优化基线，不应与在线 GRPO 混称；MAR 条件需一致。</p><p><b>日期记录：</b>21 Nov 2023</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2023-11-21</td><td>连续生成RL</td><td>用冻结 SLT 与手部 DTW 排序生成对，做离线扩散偏好训练。</td><td>中</td></tr>
+<tr class="paper" data-priority="P0" data-year="2023" data-family="连续生成RL" data-date="2023-05-22" data-search="training diffusion models with reinforcement learning ddpo 连续生成rl 把扩散去噪视为多步决策，利用逐步 gaussian 转移做策略优化。 作为当前 ddpm 连续生成 rl 的基础实现对照。 需要随机转移、正确 mask 与 reference，而非 softmax latent。">
+<td><span class="badge p0">P0</span></td>
+<td><a href="https://arxiv.org/abs/2305.13301" target="_blank" rel="noopener">Training Diffusion Models with Reinforcement Learning</a><small>2305.13301 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>把扩散去噪视为多步决策，利用逐步 Gaussian 转移做策略优化。</p><p><b>本项目提案：</b>作为当前 DDPM 连续生成 RL 的基础实现对照。</p><p><b>限制：</b>需要随机转移、正确 mask 与 reference，而非 softmax latent。</p><p><b>日期记录：</b>22 May 2023 ( ), last revised 4 Jan 2024 (this version, v4)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2023-05-22</td><td>连续生成RL</td><td>作为当前 DDPM 连续生成 RL 的基础实现对照。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2026" data-family="连续生成RL" data-date="2026-10-08" data-search="diffusionart: efficient, stable and scalable reinforcement of diffusion models diffusionart 连续生成rl 按提示聚合奖励与生成端点，直接指导反向状态，并使用恢复约束。 作为 nft/grpo 后续替代；研究每个 mar 子动作的聚合奖励方向。 2026-10-08 新预印本；当前 x0/mar 的适配尚未验证。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2610.12572" target="_blank" rel="noopener">DiffusionART: Efficient, Stable and Scalable Reinforcement of Diffusion Models</a><small>2610.12572 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>按提示聚合奖励与生成端点，直接指导反向状态，并使用恢复约束。</p><p><b>本项目提案：</b>作为 NFT/GRPO 后续替代；研究每个 MAR 子动作的聚合奖励方向。</p><p><b>限制：</b>2026-10-08 新预印本；当前 x0/MAR 的适配尚未验证。</p><p><b>日期记录：</b>8 Oct 2026</p><p><b>代码：</b><a href="https://github.com/vanzll/DiffusionART" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2026-10-08</td><td>连续生成RL</td><td>作为 NFT/GRPO 后续替代；研究每个 MAR 子动作的聚合奖励方向。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2026" data-family="训练" data-date="2026-06-15" data-search="pareto lora: mitigating modality imbalance in unified multimodal models via pareto-optimal gradient integration paretolora 训练 针对模态梯度量级和方向不平衡进行 pareto 梯度整合。 若使用 lora，分别估计 slt/slg 共享适配器梯度并比较平衡策略。 原文 emu2/comm；当前 zero 混合训练及优化器需适配。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2606.17296" target="_blank" rel="noopener">Pareto LoRA: Mitigating Modality Imbalance in Unified Multimodal Models via Pareto-Optimal Gradient Integration</a><small>2606.17296 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>针对模态梯度量级和方向不平衡进行 Pareto 梯度整合。</p><p><b>本项目提案：</b>若使用 LoRA，分别估计 SLT/SLG 共享适配器梯度并比较平衡策略。</p><p><b>限制：</b>原文 Emu2/CoMM；当前 ZeRO 混合训练及优化器需适配。</p><p><b>日期记录：</b>15 Jun 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-06-15</td><td>训练</td><td>若使用 LoRA，分别估计 SLT/SLG 共享适配器梯度并比较平衡策略。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="奖励闭环" data-date="2025-10-14" data-search="srum: fine-grained self-rewarding for unified multimodal models srum 奖励闭环 冻结理解评估器，缓存全局和局部反馈，进行奖励加权训练。 句义与手部、表情、时间段的局部反馈联合使用。 不是 grpo；当前 latent 不按身体部位分区，不能直接乘手部奖励图。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2510.12784" target="_blank" rel="noopener">SRUM: Fine-Grained Self-Rewarding for Unified Multimodal Models</a><small>2510.12784 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>冻结理解评估器，缓存全局和局部反馈，进行奖励加权训练。</p><p><b>本项目提案：</b>句义与手部、表情、时间段的局部反馈联合使用。</p><p><b>限制：</b>不是 GRPO；当前 latent 不按身体部位分区，不能直接乘手部奖励图。</p><p><b>日期记录：</b>14 Oct 2025 ( ), last revised 28 Jun 2026 (this version, v2)</p><p><b>代码：</b><a href="https://github.com/WayneJin0918/SRUM" target="_blank" rel="noopener">仓库地址</a> · 本次访问返回 404，发布状态未确认</p></details></td>
+<td>2025-10-14</td><td>奖励闭环</td><td>句义与手部、表情、时间段的局部反馈联合使用。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="连续生成RL" data-date="2025-09-19" data-search="diffusionnft: online diffusion reinforcement with forward process diffusionnft 连续生成rl 用生成结果的正负反馈在前向加噪训练目标上优化，避免反向轨迹 likelihood。 可保留现有 rollout，缓存 clean latent、奖励与 mar 条件，再做负反馈训练。 需为 x0 参数化与外层 mar 重新推导；不是负 reward 直接乘 mse。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2509.16117" target="_blank" rel="noopener">DiffusionNFT: Online Diffusion Reinforcement with Forward Process</a><small>2509.16117 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>用生成结果的正负反馈在前向加噪训练目标上优化，避免反向轨迹 likelihood。</p><p><b>本项目提案：</b>可保留现有 rollout，缓存 clean latent、奖励与 MAR 条件，再做负反馈训练。</p><p><b>限制：</b>需为 x0 参数化与外层 MAR 重新推导；不是负 reward 直接乘 MSE。</p><p><b>日期记录：</b>19 Sep 2025 ( ), last revised 16 Feb 2026 (this version, v2)</p><p><b>代码：</b><a href="https://github.com/NVlabs/DiffusionNFT" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2025-09-19</td><td>连续生成RL</td><td>可保留现有 rollout，缓存 clean latent、奖励与 MAR 条件，再做负反馈训练。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="连续生成RL" data-date="2025-07-29" data-search="mixgrpo: unlocking flow-based grpo efficiency with mixed ode-sde mixgrpo 连续生成rl 仅在滑动窗口使用 sde 与 grpo，窗口外使用 ode。 连续策略 rl 正确后，再减少需要存储、优化的去噪步骤。 先确定当前 ddpm 的窗口概率和终端处理，不能照搬 flow 调度。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2507.21802" target="_blank" rel="noopener">MixGRPO: Unlocking Flow-based GRPO Efficiency with Mixed ODE-SDE</a><small>2507.21802 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>仅在滑动窗口使用 SDE 与 GRPO，窗口外使用 ODE。</p><p><b>本项目提案：</b>连续策略 RL 正确后，再减少需要存储、优化的去噪步骤。</p><p><b>限制：</b>先确定当前 DDPM 的窗口概率和终端处理，不能照搬 flow 调度。</p><p><b>日期记录：</b>29 Jul 2025 ( ), last revised 28 Jun 2026 (this version, v7)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-07-29</td><td>连续生成RL</td><td>连续策略 RL 正确后，再减少需要存储、优化的去噪步骤。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="架构" data-date="2025-06-29" data-search="ovis-u1 technical report ovis 架构 统一训练与扩散解码器、双向 token refiner。 研究扩散前的双向时间条件细化。 现有 mt5 已双向；额外 refiner 的独立收益必须消融。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2506.23044" target="_blank" rel="noopener">Ovis-U1 Technical Report</a><small>2506.23044 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>统一训练与扩散解码器、双向 token refiner。</p><p><b>本项目提案：</b>研究扩散前的双向时间条件细化。</p><p><b>限制：</b>现有 mT5 已双向；额外 refiner 的独立收益必须消融。</p><p><b>日期记录：</b>29 Jun 2025 ( ), last revised 1 Jul 2025 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-06-29</td><td>架构</td><td>研究扩散前的双向时间条件细化。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="架构" data-date="2025-06-18" data-search="show-o2: improved native unified multimodal models showo2 架构 vae 空间中融合语义与细节两条路径，文本 ar、视觉 flow。 尝试时间对齐的 slt 特征与生成 latent 融合，或双路径蒸馏。 推理生成侧不能使用 gt 的 slt 特征；flow 与当前 ddpm 不同。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2506.15564" target="_blank" rel="noopener">Show-o2: Improved Native Unified Multimodal Models</a><small>2506.15564 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>VAE 空间中融合语义与细节两条路径，文本 AR、视觉 flow。</p><p><b>本项目提案：</b>尝试时间对齐的 SLT 特征与生成 latent 融合，或双路径蒸馏。</p><p><b>限制：</b>推理生成侧不能使用 GT 的 SLT 特征；flow 与当前 DDPM 不同。</p><p><b>日期记录：</b>18 Jun 2025 ( ), last revised 22 Sep 2025 (this version, v3)</p><p><b>代码：</b><a href="https://github.com/showlab/Show-o" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2025-06-18</td><td>架构</td><td>尝试时间对齐的 SLT 特征与生成 latent 融合，或双路径蒸馏。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="奖励闭环" data-date="2025-05-29" data-search="unirl: self-improving unified multimodal models via supervised and reinforcement learning unirl 奖励闭环 生成数据供理解学习，理解反馈再用于生成；研究 sft 与 grpo。 slg 产生候选手语，冻结教师筛选，再回放给 slt。 原文部分架构使用离散可微采样；连续系统需另建梯度路径。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2505.23380" target="_blank" rel="noopener">UniRL: Self-Improving Unified Multimodal Models via Supervised and Reinforcement Learning</a><small>2505.23380 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>生成数据供理解学习，理解反馈再用于生成；研究 SFT 与 GRPO。</p><p><b>本项目提案：</b>SLG 产生候选手语，冻结教师筛选，再回放给 SLT。</p><p><b>限制：</b>原文部分架构使用离散可微采样；连续系统需另建梯度路径。</p><p><b>日期记录：</b>29 May 2025</p><p><b>代码：</b><a href="https://github.com/showlab/UniRL" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2025-05-29</td><td>奖励闭环</td><td>SLG 产生候选手语，冻结教师筛选，再回放给 SLT。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="架构" data-date="2025-05-29" data-search="openuni: a simple baseline for unified multimodal understanding and generation openuni 架构 学习 queries 和轻量 connector，连接 mllm 与扩散模型。 以 connector/query 作为当前 cond_out_head 的可控替代。 仅增大 connector 可能解释参数收益，需等参数对照。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2505.23661" target="_blank" rel="noopener">OpenUni: A Simple Baseline for Unified Multimodal Understanding and Generation</a><small>2505.23661 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>学习 queries 和轻量 connector，连接 MLLM 与扩散模型。</p><p><b>本项目提案：</b>以 connector/query 作为当前 cond_out_head 的可控替代。</p><p><b>限制：</b>仅增大 connector 可能解释参数收益，需等参数对照。</p><p><b>日期记录：</b>29 May 2025 ( ), last revised 2 Jun 2025 (this version, v3)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-05-29</td><td>架构</td><td>以 connector/query 作为当前 cond_out_head 的可控替代。</td><td>中</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="奖励闭环" data-date="2025-05-23" data-search="co-reinforcement learning for unified multimodal understanding and generation coreinforce 奖励闭环 统一 rl 后再做任务特定 rl；联合语义与周期一致性奖励。 在成熟 slg-rl 后，加入 slt 的文本策略优化和真实数据回放。 原文基于全 ar；两种动作空间的概率和奖励尺度要分别定义。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2505.17534" target="_blank" rel="noopener">Co-Reinforcement Learning for Unified Multimodal Understanding and Generation</a><small>2505.17534 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>统一 RL 后再做任务特定 RL；联合语义与周期一致性奖励。</p><p><b>本项目提案：</b>在成熟 SLG-RL 后，加入 SLT 的文本策略优化和真实数据回放。</p><p><b>限制：</b>原文基于全 AR；两种动作空间的概率和奖励尺度要分别定义。</p><p><b>日期记录：</b>23 May 2025 ( ), last revised 20 Nov 2025 (this version, v3)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-05-23</td><td>奖励闭环</td><td>在成熟 SLG-RL 后，加入 SLT 的文本策略优化和真实数据回放。</td><td>高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="奖励闭环" data-date="2025-05-20" data-search="unigen: enhanced training &amp; test-time strategies for unified multimodal understanding and generation unigen 奖励闭环 dpo 后训练及 cot 验证，支持 best-of-n。 先用冻结 slt 奖励做候选排序，审计 reward 是否选得更好。 best-of-n 是推理策略；不是 rl 训练收益。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2505.14682" target="_blank" rel="noopener">UniGen: Enhanced Training &amp; Test-Time Strategies for Unified Multimodal Understanding and Generation</a><small>2505.14682 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>DPO 后训练及 CoT 验证，支持 Best-of-N。</p><p><b>本项目提案：</b>先用冻结 SLT 奖励做候选排序，审计 reward 是否选得更好。</p><p><b>限制：</b>Best-of-N 是推理策略；不是 RL 训练收益。</p><p><b>日期记录：</b>20 May 2025</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-05-20</td><td>奖励闭环</td><td>先用冻结 SLT 奖励做候选排序，审计 reward 是否选得更好。</td><td>低到中</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="连续生成RL" data-date="2025-05-08" data-search="flow-grpo: training flow matching models via online rl flowgrpo 连续生成rl 将 flow 的确定性 ode 转为可计算转移概率的 sde 以运行 grpo。 若改用 flow，应从此推导采样及 policy ratio。 现有模型预测 ddpm x0，不是线性 rectified flow。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2505.05470" target="_blank" rel="noopener">Flow-GRPO: Training Flow Matching Models via Online RL</a><small>2505.05470 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>将 flow 的确定性 ODE 转为可计算转移概率的 SDE 以运行 GRPO。</p><p><b>本项目提案：</b>若改用 flow，应从此推导采样及 policy ratio。</p><p><b>限制：</b>现有模型预测 DDPM x0，不是线性 rectified flow。</p><p><b>日期记录：</b>8 May 2025 ( ), last revised 27 Oct 2025 (this version, v5)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-05-08</td><td>连续生成RL</td><td>若改用 flow，应从此推导采样及 policy ratio。</td><td>高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="架构" data-date="2025-04-08" data-search="transfer between modalities with metaqueries metaquery 架构 可学习 queries 连接冻结 mllm 与扩散解码器。 替换或增强现有 mask slots，用时序 queries 抽取文本语义。 已有 mask embedding 和时间位置；新 query 必须与现状公平比较。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2504.06256" target="_blank" rel="noopener">Transfer between Modalities with MetaQueries</a><small>2504.06256 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>可学习 queries 连接冻结 MLLM 与扩散解码器。</p><p><b>本项目提案：</b>替换或增强现有 mask slots，用时序 queries 抽取文本语义。</p><p><b>限制：</b>已有 mask embedding 和时间位置；新 query 必须与现状公平比较。</p><p><b>日期记录：</b>8 Apr 2025</p><p><b>代码：</b><a href="https://github.com/facebookresearch/metaquery" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2025-04-08</td><td>架构</td><td>替换或增强现有 mask slots，用时序 queries 抽取文本语义。</td><td>中</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="架构" data-date="2025-03-17" data-search="unified autoregressive visual generation and understanding with continuous tokens unifluid 架构 连续视觉 token 与离散文本 token 的统一自回归建模。 参照连续 token 的训练配比与生成、理解之间的权衡。 参考模型为 decoder-only；当前 mt5 是 encoder-decoder。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2503.13436" target="_blank" rel="noopener">Unified Autoregressive Visual Generation and Understanding with Continuous Tokens</a><small>2503.13436 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>连续视觉 token 与离散文本 token 的统一自回归建模。</p><p><b>本项目提案：</b>参照连续 token 的训练配比与生成、理解之间的权衡。</p><p><b>限制：</b>参考模型为 decoder-only；当前 mT5 是 encoder-decoder。</p><p><b>日期记录：</b>17 Mar 2025</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-03-17</td><td>架构</td><td>参照连续 token 的训练配比与生成、理解之间的权衡。</td><td>中</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="奖励闭环" data-date="2025-03-07" data-search="unified reward model for multimodal understanding and generation unifiedreward 奖励闭环 统一偏好评估器支持排序与打分，并用于多任务 dpo。 训练手语专用奖励头，对语义、手型、时序等打分。 图像奖励模型权重不能直接处理当前 2d pose 张量。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2503.05236" target="_blank" rel="noopener">Unified Reward Model for Multimodal Understanding and Generation</a><small>2503.05236 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>统一偏好评估器支持排序与打分，并用于多任务 DPO。</p><p><b>本项目提案：</b>训练手语专用奖励头，对语义、手型、时序等打分。</p><p><b>限制：</b>图像奖励模型权重不能直接处理当前 2D pose 张量。</p><p><b>日期记录：</b>7 Mar 2025 ( ), last revised 25 Feb 2026 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-03-07</td><td>奖励闭环</td><td>训练手语专用奖励头，对语义、手型、时序等打分。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="奖励闭环" data-date="2025-02-17" data-search="hermesflow: seamlessly closing the gap in multimodal understanding and generation hermesflow 奖励闭环 同源理解和生成偏好对，pair-dpo 及迭代 self-play。 同一条 caption/pose 构建 slt 与 slg 偏好样本。 连续生成侧需 diffusion-dpo 等目标，不能套文本 logprob。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2502.12148" target="_blank" rel="noopener">HermesFlow: Seamlessly Closing the Gap in Multimodal Understanding and Generation</a><small>2502.12148 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>同源理解和生成偏好对，Pair-DPO 及迭代 self-play。</p><p><b>本项目提案：</b>同一条 caption/pose 构建 SLT 与 SLG 偏好样本。</p><p><b>限制：</b>连续生成侧需 Diffusion-DPO 等目标，不能套文本 logprob。</p><p><b>日期记录：</b>17 Feb 2025 ( ), last revised 25 Sep 2025 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-02-17</td><td>奖励闭环</td><td>同一条 caption/pose 构建 SLT 与 SLG 偏好样本。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P1" data-year="2025" data-family="训练" data-date="2025-01-29" data-search="janus-pro: unified multimodal understanding and generation with data and model scaling januspro 训练 优化课程、数据配比和规模。 检验任务配比、质量筛选、slt 保持训练与生成解冻课程。 数据扩展与模型扩容的收益不能归因给新模块。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2501.17811" target="_blank" rel="noopener">Janus-Pro: Unified Multimodal Understanding and Generation with Data and Model Scaling</a><small>2501.17811 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>优化课程、数据配比和规模。</p><p><b>本项目提案：</b>检验任务配比、质量筛选、SLT 保持训练与生成解冻课程。</p><p><b>限制：</b>数据扩展与模型扩容的收益不能归因给新模块。</p><p><b>日期记录：</b>29 Jan 2025</p><p><b>代码：</b><a href="https://github.com/deepseek-ai/Janus" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2025-01-29</td><td>训练</td><td>检验任务配比、质量筛选、SLT 保持训练与生成解冻课程。</td><td>中</td></tr>
+<tr class="paper" data-priority="P1" data-year="2023" data-family="连续生成RL" data-date="2023-11-22" data-search="using human feedback to fine-tune diffusion models without any reward model d3po 连续生成rl 直接利用偏好指导扩散去噪，省去显式奖励模型。 补充 diffusion-dpo 与在线策略训练的偏好基线。 最终样本的偏好不必在每个中间去噪状态成立。">
+<td><span class="badge p1">P1</span></td>
+<td><a href="https://arxiv.org/abs/2311.13231" target="_blank" rel="noopener">Using Human Feedback to Fine-tune Diffusion Models without Any Reward Model</a><small>2311.13231 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>直接利用偏好指导扩散去噪，省去显式奖励模型。</p><p><b>本项目提案：</b>补充 Diffusion-DPO 与在线策略训练的偏好基线。</p><p><b>限制：</b>最终样本的偏好不必在每个中间去噪状态成立。</p><p><b>日期记录：</b>22 Nov 2023 ( ), last revised 23 Mar 2024 (this version, v3)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2023-11-22</td><td>连续生成RL</td><td>补充 Diffusion-DPO 与在线策略训练的偏好基线。</td><td>中高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="奖励闭环" data-date="2026-10-08" data-search="unsupervised multimodal reward modeling unsupreward 奖励闭环 冻结 vlm 中间特征上训练轻量奖励头，正 caption 对比扰动 caption。 用语义负例训练手语奖励头，加入数词、方向、否定、时序等错误。 新预印本且原文选层仍用标签；普通词替换可能保留正确语义。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2610.12707" target="_blank" rel="noopener">Unsupervised Multimodal Reward Modeling</a><small>2610.12707 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>冻结 VLM 中间特征上训练轻量奖励头，正 caption 对比扰动 caption。</p><p><b>本项目提案：</b>用语义负例训练手语奖励头，加入数词、方向、否定、时序等错误。</p><p><b>限制：</b>新预印本且原文选层仍用标签；普通词替换可能保留正确语义。</p><p><b>日期记录：</b>8 Oct 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-10-08</td><td>奖励闭环</td><td>用语义负例训练手语奖励头，加入数词、方向、否定、时序等错误。</td><td>中</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="推理修复" data-date="2026-10-02" data-search="recursive self-improvement in unified multimodal models recursive 推理修复 通过程序执行验证生成训练数据，反复改进文字与视觉能力。 借鉴独立验证与针对失败样本的数据课程。 图表程序可精确验证，手语语义通常没有同等执行 oracle。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2610.03002" target="_blank" rel="noopener">Recursive Self-Improvement in Unified Multimodal Models</a><small>2610.03002 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>通过程序执行验证生成训练数据，反复改进文字与视觉能力。</p><p><b>本项目提案：</b>借鉴独立验证与针对失败样本的数据课程。</p><p><b>限制：</b>图表程序可精确验证，手语语义通常没有同等执行 oracle。</p><p><b>日期记录：</b>2 Oct 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-10-02</td><td>推理修复</td><td>借鉴独立验证与针对失败样本的数据课程。</td><td>很高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="推理修复" data-date="2026-09-28" data-search="learning native reflection in unified models with interleaved reinforcement learning reflection 推理修复 对完整反思、修改序列做统一 rl，共享起始图像来比较策略。 未来训练生成→识别错误→局部修复的手语多轮轨迹。 目前翻译 decoder 不支持诊断文本，生成也没有条件编辑接口。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2609.35767" target="_blank" rel="noopener">Learning Native Reflection in Unified Models with Interleaved Reinforcement Learning</a><small>2609.35767 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>对完整反思、修改序列做统一 RL，共享起始图像来比较策略。</p><p><b>本项目提案：</b>未来训练生成→识别错误→局部修复的手语多轮轨迹。</p><p><b>限制：</b>目前翻译 decoder 不支持诊断文本，生成也没有条件编辑接口。</p><p><b>日期记录：</b>28 Sep 2026</p><p><b>代码：</b><a href="https://github.com/waltstephen/UMM-Reflection" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2026-09-28</td><td>推理修复</td><td>未来训练生成→识别错误→局部修复的手语多轮轨迹。</td><td>很高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="连续生成RL" data-date="2026-09-26" data-search="sga-flow-grpo: spatial gradient-guided credit assignment for flow-grpo sga 连续生成rl 利用 reward 梯度构建空间 credit，按视觉 token 分配策略更新。 可研究时间段 credit，或使用部位分解 latent 后的手部 credit。 普通 dtw、bleu 是不可微黑盒，现有 latent 也无空间 patch 对应。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2609.32340" target="_blank" rel="noopener">SGA-Flow-GRPO: Spatial Gradient-Guided Credit Assignment for Flow-GRPO</a><small>2609.32340 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>利用 reward 梯度构建空间 credit，按视觉 token 分配策略更新。</p><p><b>本项目提案：</b>可研究时间段 credit，或使用部位分解 latent 后的手部 credit。</p><p><b>限制：</b>普通 DTW、BLEU 是不可微黑盒，现有 latent 也无空间 patch 对应。</p><p><b>日期记录：</b>26 Sep 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-09-26</td><td>连续生成RL</td><td>可研究时间段 credit，或使用部位分解 latent 后的手部 credit。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="表示" data-date="2026-07-28" data-search="argus-unified: towards a compact and economical unified model for image understanding and generation argus 表示 冻结语义编码器，理解使用连续 token，生成学习离散 token。 复用 slt 编码器，比较连续语义特征和可重建表示。 当前没有从 st-gcn 语义到 pose 的量化及重建模块。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2607.25527" target="_blank" rel="noopener">Argus-Unified: Towards A Compact and Economical Unified Model for Image Understanding and Generation</a><small>2607.25527 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>冻结语义编码器，理解使用连续 token，生成学习离散 token。</p><p><b>本项目提案：</b>复用 SLT 编码器，比较连续语义特征和可重建表示。</p><p><b>限制：</b>当前没有从 ST-GCN 语义到 pose 的量化及重建模块。</p><p><b>日期记录：</b>28 Jul 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-07-28</td><td>表示</td><td>复用 SLT 编码器，比较连续语义特征和可重建表示。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="奖励闭环" data-date="2026-06-25" data-search="ask, solve, generate: self-evolving unified multimodal understanding and generation via self-consistency rewards asksolve 奖励闭环 proposer、solver、generator 内部角色以一致性信号学习。 有手语属性问答能力后，构建诊断、生成、验证循环。 目前 slt 仅翻译，尚不具备通用属性 qa。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2606.27376" target="_blank" rel="noopener">Ask, Solve, Generate: Self-Evolving Unified Multimodal Understanding and Generation via Self-Consistency Rewards</a><small>2606.27376 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>Proposer、Solver、Generator 内部角色以一致性信号学习。</p><p><b>本项目提案：</b>有手语属性问答能力后，构建诊断、生成、验证循环。</p><p><b>限制：</b>目前 SLT 仅翻译，尚不具备通用属性 QA。</p><p><b>日期记录：</b>25 Jun 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-06-25</td><td>奖励闭环</td><td>有手语属性问答能力后，构建诊断、生成、验证循环。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="连续生成RL" data-date="2026-06-25" data-search="spatialflow-grpo: where spatial credit drives image editing spatialflow 连续生成rl 将区域奖励对齐到 latent 区域并优化图像编辑。 局部手语修复能力建立后，比较手部、面部、身体区域奖励。 需要区域与 latent 的映射及编辑任务数据。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2606.26872" target="_blank" rel="noopener">SpatialFlow-GRPO: Where Spatial Credit Drives Image Editing</a><small>2606.26872 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>将区域奖励对齐到 latent 区域并优化图像编辑。</p><p><b>本项目提案：</b>局部手语修复能力建立后，比较手部、面部、身体区域奖励。</p><p><b>限制：</b>需要区域与 latent 的映射及编辑任务数据。</p><p><b>日期记录：</b>25 Jun 2026 ( ), last revised 26 Jun 2026 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-06-25</td><td>连续生成RL</td><td>局部手语修复能力建立后，比较手部、面部、身体区域奖励。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="表示" data-date="2026-06-16" data-search="unified multimodal autoregressive modeling with shared context-visual tokenizer is key to unification cvtoken 表示 uniar 使用共享 context-visual tokenizer 连接理解与生成。 探索共享手语条件空间，作为双编码入口的替代对照。 仅核对摘要，具体量化和训练约束仍需逐节复核。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2606.18249" target="_blank" rel="noopener">Unified Multimodal Autoregressive Modeling with Shared Context-Visual Tokenizer is Key to Unification</a><small>2606.18249 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>UniAR 使用共享 context-visual tokenizer 连接理解与生成。</p><p><b>本项目提案：</b>探索共享手语条件空间，作为双编码入口的替代对照。</p><p><b>限制：</b>仅核对摘要，具体量化和训练约束仍需逐节复核。</p><p><b>日期记录：</b>16 Jun 2026 ( ), last revised 17 Jun 2026 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-06-16</td><td>表示</td><td>探索共享手语条件空间，作为双编码入口的替代对照。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="表示" data-date="2026-05-18" data-search="wintok: a win-win hybrid tokenizer via decomposing visual understanding and generation with transferable tokens wintok 表示 像素 token 外增加语义 token，并做非对称蒸馏。 将手型细节与句义 token 分开建模，并保留可转移交互。 是 tokenizer 级改造；增加语义 token 本身不保证手语可重建。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2605.18115" target="_blank" rel="noopener">WinTok: A Win-Win Hybrid Tokenizer via Decomposing Visual Understanding and Generation with Transferable Tokens</a><small>2605.18115 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>像素 token 外增加语义 token，并做非对称蒸馏。</p><p><b>本项目提案：</b>将手型细节与句义 token 分开建模，并保留可转移交互。</p><p><b>限制：</b>是 tokenizer 级改造；增加语义 token 本身不保证手语可重建。</p><p><b>日期记录：</b>18 May 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-05-18</td><td>表示</td><td>将手型细节与句义 token 分开建模，并保留可转移交互。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="架构" data-date="2026-05-12" data-search="sensenova-u1: unifying multimodal understanding and generation with neo-unify architecture senseu1 架构 neo-unify 以轻量视觉接口和原生 mot 直接进行像素与语言建模。 长期可比较直接 pose-space 生成和 latent-space 生成。 完整原生架构与现有 checkpoint 不兼容，不能当作小补丁。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2605.12500" target="_blank" rel="noopener">SenseNova-U1: Unifying Multimodal Understanding and Generation with NEO-unify Architecture</a><small>2605.12500 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>NEO-unify 以轻量视觉接口和原生 MoT 直接进行像素与语言建模。</p><p><b>本项目提案：</b>长期可比较直接 pose-space 生成和 latent-space 生成。</p><p><b>限制：</b>完整原生架构与现有 checkpoint 不兼容，不能当作小补丁。</p><p><b>日期记录：</b>12 May 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-05-12</td><td>架构</td><td>长期可比较直接 pose-space 生成和 latent-space 生成。</td><td>很高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="奖励闭环" data-date="2026-05-11" data-search="uni-synergy: bridging understanding and generation for personalized reasoning via co-operative reinforcement learning unisynergy 奖励闭环 个性化理解与生成联合 rl，组合奖励并动态选择轨迹。 用于 signer、风格和上下文控制的后续扩展。 当前模型没有显式 signer 控制或个性化标签。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2605.10445" target="_blank" rel="noopener">Uni-Synergy: Bridging Understanding and Generation for Personalized Reasoning via Co-operative Reinforcement Learning</a><small>2605.10445 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>个性化理解与生成联合 RL，组合奖励并动态选择轨迹。</p><p><b>本项目提案：</b>用于 signer、风格和上下文控制的后续扩展。</p><p><b>限制：</b>当前模型没有显式 signer 控制或个性化标签。</p><p><b>日期记录：</b>11 May 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-05-11</td><td>奖励闭环</td><td>用于 signer、风格和上下文控制的后续扩展。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="连续生成RL" data-date="2026-03-24" data-search="unigrpo: unified policy optimization for reasoning-driven visual generation unigrpo2026 连续生成rl 把文本 reasoning grpo 与 flowgrpo 放入统一决策过程。 未来联合优化手语规划文本与连续动作。 不同于 mmada 同名 unigrpo；当前没有规划与 flow 路径。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2603.23500" target="_blank" rel="noopener">UniGRPO: Unified Policy Optimization for Reasoning-Driven Visual Generation</a><small>2603.23500 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>把文本 reasoning GRPO 与 FlowGRPO 放入统一决策过程。</p><p><b>本项目提案：</b>未来联合优化手语规划文本与连续动作。</p><p><b>限制：</b>不同于 MMaDA 同名 UniGRPO；当前没有规划与 flow 路径。</p><p><b>日期记录：</b>24 Mar 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-03-24</td><td>连续生成RL</td><td>未来联合优化手语规划文本与连续动作。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2026" data-family="表示" data-date="2026-02-15" data-search="uniwetok: an unified binary tokenizer with codebook size $\mathit{2^{128}}$ for unified multimodal large language model uniwetok 表示 大型二进制码本、前后蒸馏与生成先验协调语义及重建。 重训 tokenizer 时参考语义蒸馏与编码容量。 不是给现有 kl-vae 换个 codebook 参数即可。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2602.14178" target="_blank" rel="noopener">UniWeTok: An Unified Binary Tokenizer with Codebook Size $\mathit{2^{128}}$ for Unified Multimodal Large Language Model</a><small>2602.14178 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>大型二进制码本、前后蒸馏与生成先验协调语义及重建。</p><p><b>本项目提案：</b>重训 tokenizer 时参考语义蒸馏与编码容量。</p><p><b>限制：</b>不是给现有 KL-VAE 换个 codebook 参数即可。</p><p><b>日期记录：</b>15 Feb 2026 ( ), last revised 11 Mar 2026 (this version, v3)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-02-15</td><td>表示</td><td>重训 tokenizer 时参考语义蒸馏与编码容量。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="奖励闭环" data-date="2025-11-18" data-search="unigen-1.5: enhancing image generation and editing through reward unification in reinforcement learning unigen15 奖励闭环 共享奖励模型联合优化图像生成与编辑。 在 pose 修复任务建立后，统一生成与修复奖励。 当前没有编辑接口；先加入编辑会扩大研究范围。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2511.14760" target="_blank" rel="noopener">UniGen-1.5: Enhancing Image Generation and Editing through Reward Unification in Reinforcement Learning</a><small>2511.14760 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>共享奖励模型联合优化图像生成与编辑。</p><p><b>本项目提案：</b>在 pose 修复任务建立后，统一生成与修复奖励。</p><p><b>限制：</b>当前没有编辑接口；先加入编辑会扩大研究范围。</p><p><b>日期记录：</b>18 Nov 2025</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-11-18</td><td>奖励闭环</td><td>在 pose 修复任务建立后，统一生成与修复奖励。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="表示" data-date="2025-10-13" data-search="diffusion transformers with representation autoencoders rae 表示 冻结语义编码器加重建解码器，直接在表示空间扩散。 用冻结 slt 编码器训练 pose decoder，测语义空间的手型重建上限。 st-gcn 池化可能丢信息，必须先证明可重建，旧 vae 权重不能沿用。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2510.11690" target="_blank" rel="noopener">Diffusion Transformers with Representation Autoencoders</a><small>2510.11690 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>冻结语义编码器加重建解码器，直接在表示空间扩散。</p><p><b>本项目提案：</b>用冻结 SLT 编码器训练 pose decoder，测语义空间的手型重建上限。</p><p><b>限制：</b>ST-GCN 池化可能丢信息，必须先证明可重建，旧 VAE 权重不能沿用。</p><p><b>日期记录：</b>13 Oct 2025</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-10-13</td><td>表示</td><td>用冻结 SLT 编码器训练 pose decoder，测语义空间的手型重建上限。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="表示" data-date="2025-10-12" data-search="uniflow: a unified pixel flow tokenizer for visual understanding and generation uniflow 表示 语义自蒸馏与 patch-wise pixel flow 解码。 用语义保持的时序编码器加局部动作解码器。 手部不是独立图片 patch，跨部位协调需另建约束。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2510.10575" target="_blank" rel="noopener">UniFlow: A Unified Pixel Flow Tokenizer for Visual Understanding and Generation</a><small>2510.10575 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>语义自蒸馏与 patch-wise pixel flow 解码。</p><p><b>本项目提案：</b>用语义保持的时序编码器加局部动作解码器。</p><p><b>限制：</b>手部不是独立图片 patch，跨部位协调需另建约束。</p><p><b>日期记录：</b>12 Oct 2025 ( ), last revised 28 Feb 2026 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-10-12</td><td>表示</td><td>用语义保持的时序编码器加局部动作解码器。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="架构" data-date="2025-10-07" data-search="lumina-dimoo: an omni diffusion large language model for multi-modal generation and understanding lumina 架构 统一离散扩散处理文字和图像，具备生成、编辑与理解。 作为最大表示共享的对照与跨任务迁移参考。 当前连续 latent 和 ar 文本 decoder 都不同。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2510.06308" target="_blank" rel="noopener">Lumina-DiMOO: An Omni Diffusion Large Language Model for Multi-Modal Generation and Understanding</a><small>2510.06308 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>统一离散扩散处理文字和图像，具备生成、编辑与理解。</p><p><b>本项目提案：</b>作为最大表示共享的对照与跨任务迁移参考。</p><p><b>限制：</b>当前连续 latent 和 AR 文本 decoder 都不同。</p><p><b>日期记录：</b>7 Oct 2025</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-10-07</td><td>架构</td><td>作为最大表示共享的对照与跨任务迁移参考。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="表示" data-date="2025-07-31" data-search="unilip: adapting clip for unified multimodal understanding, generation and editing unilip 表示 自蒸馏维持 clip 语义并训练重建，双条件结合上下文与查询。 可借鉴 slt 语义保持与重建条件分工。 完整方案需要可解码的语义编码器。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2507.23278" target="_blank" rel="noopener">UniLiP: Adapting CLIP for Unified Multimodal Understanding, Generation and Editing</a><small>2507.23278 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>自蒸馏维持 CLIP 语义并训练重建，双条件结合上下文与查询。</p><p><b>本项目提案：</b>可借鉴 SLT 语义保持与重建条件分工。</p><p><b>限制：</b>完整方案需要可解码的语义编码器。</p><p><b>日期记录：</b>31 Jul 2025 ( ), last revised 9 Feb 2026 (this version, v3)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-07-31</td><td>表示</td><td>可借鉴 SLT 语义保持与重建条件分工。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="表示" data-date="2025-06-03" data-search="uniworld-v1: high-resolution semantic encoders for unified visual understanding and generation uniworld 表示 高分辨率语义编码用于理解、生成与操作。 评估增加手部细节分辨率、减少关节池化损失。 图像作者对闭源模型的推测不能当作已证实的内部架构。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2506.03147" target="_blank" rel="noopener">UniWorld-V1: High-Resolution Semantic Encoders for Unified Visual Understanding and Generation</a><small>2506.03147 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>高分辨率语义编码用于理解、生成与操作。</p><p><b>本项目提案：</b>评估增加手部细节分辨率、减少关节池化损失。</p><p><b>限制：</b>图像作者对闭源模型的推测不能当作已证实的内部架构。</p><p><b>日期记录：</b>3 Jun 2025 ( ), last revised 18 Jun 2025 (this version, v4)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-06-03</td><td>表示</td><td>评估增加手部细节分辨率、减少关节池化损失。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="推理修复" data-date="2025-05-30" data-search="reasongen-r1: cot for autoregressive image generation models through sft and rl reasongen 推理修复 先用理由轨迹 sft，再 grpo 优化自回归图像生成。 先研究紧凑手语计划，再比较直接生成。 计划正确性与动作可实现性须独立评估。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2505.24875" target="_blank" rel="noopener">ReasonGen-R1: CoT for Autoregressive Image generation models through SFT and RL</a><small>2505.24875 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>先用理由轨迹 SFT，再 GRPO 优化自回归图像生成。</p><p><b>本项目提案：</b>先研究紧凑手语计划，再比较直接生成。</p><p><b>限制：</b>计划正确性与动作可实现性须独立评估。</p><p><b>日期记录：</b>30 May 2025 ( ), last revised 5 Jun 2025 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-05-30</td><td>推理修复</td><td>先研究紧凑手语计划，再比较直接生成。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="架构" data-date="2025-05-21" data-search="mmada: multimodal large diffusion language models mmada 架构 离散多模态扩散、混合 cot 和 unigrpo。 借鉴混合后训练和任务奖励设计。 其离散扩散概率不适用于当前连续 ddim。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2505.15809" target="_blank" rel="noopener">MMaDA: Multimodal Large Diffusion Language Models</a><small>2505.15809 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>离散多模态扩散、混合 CoT 和 UniGRPO。</p><p><b>本项目提案：</b>借鉴混合后训练和任务奖励设计。</p><p><b>限制：</b>其离散扩散概率不适用于当前连续 DDIM。</p><p><b>日期记录：</b>21 May 2025 ( ), last revised 25 Sep 2025 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-05-21</td><td>架构</td><td>借鉴混合后训练和任务奖励设计。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="架构" data-date="2025-05-20" data-search="emerging properties in unified multimodal pretraining bagel 架构 mixture-of-transformers 联合处理理解与生成，支持交错序列。 研究共享交互、任务专属变换的轻量版本。 完整 mot 涉及主干改写和额外参数，不是加入一个普通 moe。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2505.14683" target="_blank" rel="noopener">Emerging Properties in Unified Multimodal Pretraining</a><small>2505.14683 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>Mixture-of-Transformers 联合处理理解与生成，支持交错序列。</p><p><b>本项目提案：</b>研究共享交互、任务专属变换的轻量版本。</p><p><b>限制：</b>完整 MoT 涉及主干改写和额外参数，不是加入一个普通 MoE。</p><p><b>日期记录：</b>20 May 2025 ( ), last revised 27 Jul 2025 (this version, v3)</p><p><b>代码：</b><a href="https://github.com/ByteDance-Seed/Bagel" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2025-05-20</td><td>架构</td><td>研究共享交互、任务专属变换的轻量版本。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="表示" data-date="2025-05-14" data-search="blip3-o: a family of fully open unified multimodal models-architecture, training and dataset blip3o 表示 生成富语义 clip 特征，并利用生成解码器还原图像。 训练可解码的手语语义 latent，比较重建 latent 与语义 latent。 现有 st-gcn 的池化特征可能已丢失精细手型。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2505.09568" target="_blank" rel="noopener">BLIP3-o: A Family of Fully Open Unified Multimodal Models-Architecture, Training and Dataset</a><small>2505.09568 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>生成富语义 CLIP 特征，并利用生成解码器还原图像。</p><p><b>本项目提案：</b>训练可解码的手语语义 latent，比较重建 latent 与语义 latent。</p><p><b>限制：</b>现有 ST-GCN 的池化特征可能已丢失精细手型。</p><p><b>日期记录：</b>14 May 2025</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-05-14</td><td>表示</td><td>训练可解码的手语语义 latent，比较重建 latent 与语义 latent。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="推理修复" data-date="2025-05-01" data-search="t2i-r1: reinforcing image generation with collaborative semantic-level and token-level cot t2ir1 推理修复 语义级 cot 与视觉 token 生成过程协同 grpo。 未来让文本规划描述手型、位置、轨迹和非手部表达。 现有文本只有 caption，无规划监督；离散 token cot 不适用连续头。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2505.00703" target="_blank" rel="noopener">T2I-R1: Reinforcing Image Generation with Collaborative Semantic-level and Token-level CoT</a><small>2505.00703 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>语义级 CoT 与视觉 token 生成过程协同 GRPO。</p><p><b>本项目提案：</b>未来让文本规划描述手型、位置、轨迹和非手部表达。</p><p><b>限制：</b>现有文本只有 caption，无规划监督；离散 token CoT 不适用连续头。</p><p><b>日期记录：</b>1 May 2025 ( ), last revised 1 Jul 2025 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-05-01</td><td>推理修复</td><td>未来让文本规划描述手型、位置、轨迹和非手部表达。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="表示" data-date="2025-04-14" data-search="repa-e: unlocking vae for end-to-end tuning with latent diffusion transformers repae 表示 借助表示对齐联合训练 vae 和扩散模型。 只有发现 vae 明显限制手型或语义时，才研究 codec 联合调优。 改变 vae 会使旧 latent 统计和生成权重失配。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2504.10483" target="_blank" rel="noopener">REPA-E: Unlocking VAE for End-to-End Tuning with Latent Diffusion Transformers</a><small>2504.10483 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>借助表示对齐联合训练 VAE 和扩散模型。</p><p><b>本项目提案：</b>只有发现 VAE 明显限制手型或语义时，才研究 codec 联合调优。</p><p><b>限制：</b>改变 VAE 会使旧 latent 统计和生成权重失配。</p><p><b>日期记录：</b>14 Apr 2025 ( ), last revised 22 Oct 2025 (this version, v3)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-04-14</td><td>表示</td><td>只有发现 VAE 明显限制手型或语义时，才研究 codec 联合调优。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="表示" data-date="2025-04-06" data-search="unitoken: harmonizing multimodal understanding and generation through unified visual encoding unitoken 表示 混合连续语义表示与离散视觉表示。 研究双入口保留细节和语义，再进行受控融合。 不是当前连续 latent 原样附加一个离散 token 即可。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2504.04423" target="_blank" rel="noopener">UniToken: Harmonizing Multimodal Understanding and Generation through Unified Visual Encoding</a><small>2504.04423 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>混合连续语义表示与离散视觉表示。</p><p><b>本项目提案：</b>研究双入口保留细节和语义，再进行受控融合。</p><p><b>限制：</b>不是当前连续 latent 原样附加一个离散 token 即可。</p><p><b>日期记录：</b>6 Apr 2025</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-04-06</td><td>表示</td><td>研究双入口保留细节和语义，再进行受控融合。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="表示" data-date="2025-03-27" data-search="harmonizing visual representations for unified multimodal understanding and generation harmon 表示 使用 mar 编码器同时提供理解与生成表示。 比较复用 mar 生成表示进行 slt，而非独立 st-gcn。 需要预训练和主干改造，先做 feature probe 更经济。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2503.21979" target="_blank" rel="noopener">Harmonizing Visual Representations for Unified Multimodal Understanding and Generation</a><small>2503.21979 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>使用 MAR 编码器同时提供理解与生成表示。</p><p><b>本项目提案：</b>比较复用 MAR 生成表示进行 SLT，而非独立 ST-GCN。</p><p><b>限制：</b>需要预训练和主干改造，先做 feature probe 更经济。</p><p><b>日期记录：</b>27 Mar 2025 ( ), last revised 22 Apr 2025 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-03-27</td><td>表示</td><td>比较复用 MAR 生成表示进行 SLT，而非独立 ST-GCN。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2025" data-family="表示" data-date="2025-02-27" data-search="unitok: a unified tokenizer for visual generation and understanding unitok 表示 扩大离散表示容量，使用多码本协调语义与重建。 如重训手语 tokenizer，比较码本容量和语义监督。 需要重训 codec 并重建生成阶段，不能复用原 latent checkpoint。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2502.20321" target="_blank" rel="noopener">UniTok: A Unified Tokenizer for Visual Generation and Understanding</a><small>2502.20321 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>扩大离散表示容量，使用多码本协调语义与重建。</p><p><b>本项目提案：</b>如重训手语 tokenizer，比较码本容量和语义监督。</p><p><b>限制：</b>需要重训 codec 并重建生成阶段，不能复用原 latent checkpoint。</p><p><b>日期记录：</b>27 Feb 2025 ( ), last revised 24 Oct 2025 (this version, v3)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-02-27</td><td>表示</td><td>如重训手语 tokenizer，比较码本容量和语义监督。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2024" data-family="表示" data-date="2024-12-04" data-search="tokenflow: unified image tokenizer for multimodal understanding and generation tokenflow 表示 语义与像素双码本通过共享索引建立对应。 构建语义码与手型细节码的对应关系，作为离散替代路线。 共享索引不等于两个任意编码器输出直接相加。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2412.03069" target="_blank" rel="noopener">TokenFlow: Unified Image Tokenizer for Multimodal Understanding and Generation</a><small>2412.03069 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>语义与像素双码本通过共享索引建立对应。</p><p><b>本项目提案：</b>构建语义码与手型细节码的对应关系，作为离散替代路线。</p><p><b>限制：</b>共享索引不等于两个任意编码器输出直接相加。</p><p><b>日期记录：</b>4 Dec 2024 ( ), last revised 7 Aug 2025 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2024-12-04</td><td>表示</td><td>构建语义码与手型细节码的对应关系，作为离散替代路线。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2024" data-family="表示" data-date="2024-09-06" data-search="vila-u: a unified foundation model integrating visual understanding and generation vilau 表示 统一视觉塔对齐离散视觉 token 与文本，以 ar 统一任务。 离散语义 tokenizer 的基线与对照。 需要视觉塔或手语 tokenizer 预训练。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2409.04429" target="_blank" rel="noopener">VILA-U: a Unified Foundation Model Integrating Visual Understanding and Generation</a><small>2409.04429 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>统一视觉塔对齐离散视觉 token 与文本，以 AR 统一任务。</p><p><b>本项目提案：</b>离散语义 tokenizer 的基线与对照。</p><p><b>限制：</b>需要视觉塔或手语 tokenizer 预训练。</p><p><b>日期记录：</b>6 Sep 2024 ( ), last revised 4 Mar 2025 (this version, v3)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2024-09-06</td><td>表示</td><td>离散语义 tokenizer 的基线与对照。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2024" data-family="架构" data-date="2024-08-22" data-search="show-o: one single transformer to unify multimodal understanding and generation showo 架构 文本自回归与离散视觉扩散统一于单个 transformer。 离散手语 tokenizer 分支的对照架构。 当前连续 kl-vae 无分类 token 概率。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2408.12528" target="_blank" rel="noopener">Show-o: One Single Transformer to Unify Multimodal Understanding and Generation</a><small>2408.12528 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>文本自回归与离散视觉扩散统一于单个 Transformer。</p><p><b>本项目提案：</b>离散手语 tokenizer 分支的对照架构。</p><p><b>限制：</b>当前连续 KL-VAE 无分类 token 概率。</p><p><b>日期记录：</b>22 Aug 2024 ( ), last revised 8 Sep 2025 (this version, v7)</p><p><b>代码：</b><a href="https://github.com/showlab/Show-o" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2024-08-22</td><td>架构</td><td>离散手语 tokenizer 分支的对照架构。</td><td>高</td></tr>
+<tr class="paper" data-priority="P2" data-year="2024" data-family="架构" data-date="2024-08-20" data-search="transfusion: predict the next token and diffuse images with one multi-modal model transfusion 架构 同一 transformer 对文本做 ce，对连续图像做扩散。 若重构统一主干，可让共享网络直接处理带噪手语 latent。 当前 mt5 编码器加独立 mlp 不等于原文混合序列 transformer。">
+<td><span class="badge ">P2</span></td>
+<td><a href="https://arxiv.org/abs/2408.11039" target="_blank" rel="noopener">Transfusion: Predict the Next Token and Diffuse Images with One Multi-Modal Model</a><small>2408.11039 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>同一 Transformer 对文本做 CE，对连续图像做扩散。</p><p><b>本项目提案：</b>若重构统一主干，可让共享网络直接处理带噪手语 latent。</p><p><b>限制：</b>当前 mT5 编码器加独立 MLP 不等于原文混合序列 Transformer。</p><p><b>日期记录：</b>20 Aug 2024</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2024-08-20</td><td>架构</td><td>若重构统一主干，可让共享网络直接处理带噪手语 latent。</td><td>高</td></tr>
+<tr class="paper" data-priority="必读" data-year="2026" data-family="评估" data-date="2026-09-29" data-search="does gradient conflict predict the understanding--generation trade-off? a controlled audit of conflict-metric validity in unified multimodal models gradconflict 评估 在受控测试中审计梯度冲突指标与真实任务权衡的关系。 记录梯度范数、夹角，同时直接测 slt/slg 性能和功能干扰。 合成控制实验的负结论不等于所有梯度方法无效。">
+<td><span class="badge ">必读</span></td>
+<td><a href="https://arxiv.org/abs/2609.38465" target="_blank" rel="noopener">Does Gradient Conflict Predict the Understanding--Generation Trade-off? A Controlled Audit of Conflict-Metric Validity in Unified Multimodal Models</a><small>2609.38465 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>在受控测试中审计梯度冲突指标与真实任务权衡的关系。</p><p><b>本项目提案：</b>记录梯度范数、夹角，同时直接测 SLT/SLG 性能和功能干扰。</p><p><b>限制：</b>合成控制实验的负结论不等于所有梯度方法无效。</p><p><b>日期记录：</b>29 Sep 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-09-29</td><td>评估</td><td>记录梯度范数、夹角，同时直接测 SLT/SLG 性能和功能干扰。</td><td>低</td></tr>
+<tr class="paper" data-priority="必读" data-year="2026" data-family="评估" data-date="2026-09-01" data-search="uncovering understanding-generation synergy in native unified multimodal models: from representation, task to system synergy 评估 研究表示、任务、系统三个层级的协同与任务分工。 将共享主干、语义交互、任务专属层分开消融。 其从原生结构出发的结论与预训练 st-gcn+mt5 设定不同。">
+<td><span class="badge ">必读</span></td>
+<td><a href="https://arxiv.org/abs/2609.01607" target="_blank" rel="noopener">Uncovering Understanding-Generation Synergy in Native Unified Multimodal Models: From Representation, Task to System</a><small>2609.01607 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>研究表示、任务、系统三个层级的协同与任务分工。</p><p><b>本项目提案：</b>将共享主干、语义交互、任务专属层分开消融。</p><p><b>限制：</b>其从原生结构出发的结论与预训练 ST-GCN+mT5 设定不同。</p><p><b>日期记录：</b>1 Sep 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-09-01</td><td>评估</td><td>将共享主干、语义交互、任务专属层分开消融。</td><td>低</td></tr>
+<tr class="paper" data-priority="必读" data-year="2026" data-family="评估" data-date="2026-08-23" data-search="when does visual generation help visual understanding in unified multimodal models? whenhelp 评估 诊断生成视觉辅助何时帮助理解及瓶颈所在。 研究重建或修复后再翻译，按难度分层并与 oracle 对照。 生成后再理解增加计算，并不自动改善 slt。">
+<td><span class="badge ">必读</span></td>
+<td><a href="https://arxiv.org/abs/2608.22174" target="_blank" rel="noopener">When Does Visual Generation Help Visual Understanding in Unified Multimodal Models?</a><small>2608.22174 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>诊断生成视觉辅助何时帮助理解及瓶颈所在。</p><p><b>本项目提案：</b>研究重建或修复后再翻译，按难度分层并与 oracle 对照。</p><p><b>限制：</b>生成后再理解增加计算，并不自动改善 SLT。</p><p><b>日期记录：</b>23 Aug 2026 ( ), last revised 25 Aug 2026 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-08-23</td><td>评估</td><td>研究重建或修复后再翻译，按难度分层并与 oracle 对照。</td><td>低</td></tr>
+<tr class="paper" data-priority="必读" data-year="2026" data-family="评估" data-date="2026-07-05" data-search="transferability between understanding and generation in unified multimodal models transfer 评估 用能力探针测试单任务训练能否迁移到另一任务，比较架构。 分别只训 slt 和只训 slg，测试另一方向，控制数据和计算预算。 原文图像能力结论不能直接推广为手语因果规律。">
+<td><span class="badge ">必读</span></td>
+<td><a href="https://arxiv.org/abs/2607.04423" target="_blank" rel="noopener">Transferability Between Understanding and Generation in Unified Multimodal Models</a><small>2607.04423 · 方法章节核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>用能力探针测试单任务训练能否迁移到另一任务，比较架构。</p><p><b>本项目提案：</b>分别只训 SLT 和只训 SLG，测试另一方向，控制数据和计算预算。</p><p><b>限制：</b>原文图像能力结论不能直接推广为手语因果规律。</p><p><b>日期记录：</b>5 Jul 2026 ( ), last revised 7 Jul 2026 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-07-05</td><td>评估</td><td>分别只训 SLT 和只训 SLG，测试另一方向，控制数据和计算预算。</td><td>低</td></tr>
+<tr class="paper" data-priority="必读" data-year="2026" data-family="评估" data-date="2026-03-03" data-search="unig2u-bench: do unified models advance multimodal understanding? unig2u 评估 系统评测生成到理解的迁移，区分多类子任务。 设计手型、方向、时序、缺失动作等可验证的跨任务探针。 图像 benchmark 不能直接作为手语终评。">
+<td><span class="badge ">必读</span></td>
+<td><a href="https://arxiv.org/abs/2603.03241" target="_blank" rel="noopener">UniG2U-Bench: Do Unified Models Advance Multimodal Understanding?</a><small>2603.03241 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>系统评测生成到理解的迁移，区分多类子任务。</p><p><b>本项目提案：</b>设计手型、方向、时序、缺失动作等可验证的跨任务探针。</p><p><b>限制：</b>图像 benchmark 不能直接作为手语终评。</p><p><b>日期记录：</b>3 Mar 2026</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2026-03-03</td><td>评估</td><td>设计手型、方向、时序、缺失动作等可验证的跨任务探针。</td><td>低</td></tr>
+<tr class="paper" data-priority="必读" data-year="2025" data-family="评估" data-date="2025-09-29" data-search="realunify: do unified models truly benefit from unification? a comprehensive benchmark realunify 评估 同时评估理解帮助生成与生成帮助理解，分解瓶颈。 双向训练必须分别证明 slt 和 slg 的收益。 共享参数或双向接口本身不构成协同证据。">
+<td><span class="badge ">必读</span></td>
+<td><a href="https://arxiv.org/abs/2509.24897" target="_blank" rel="noopener">RealUnify: Do Unified Models Truly Benefit from Unification? A Comprehensive Benchmark</a><small>2509.24897 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>同时评估理解帮助生成与生成帮助理解，分解瓶颈。</p><p><b>本项目提案：</b>双向训练必须分别证明 SLT 和 SLG 的收益。</p><p><b>限制：</b>共享参数或双向接口本身不构成协同证据。</p><p><b>日期记录：</b>29 Sep 2025 ( ), last revised 20 Mar 2026 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2025-09-29</td><td>评估</td><td>双向训练必须分别证明 SLT 和 SLG 的收益。</td><td>低</td></tr>
+<tr class="paper" data-priority="背景" data-year="2024" data-family="架构" data-date="2024-12-05" data-search="liquid: language models are scalable and unified multi-modal generators liquid 架构 学习离散图像码与文本的共享特征，研究规模效应。 用于讨论共享模型容量和多任务权衡。 扩容实验不属于低成本附加模块。">
+<td><span class="badge ">背景</span></td>
+<td><a href="https://arxiv.org/abs/2412.04332" target="_blank" rel="noopener">Liquid: Language Models are Scalable and Unified Multi-modal Generators</a><small>2412.04332 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>学习离散图像码与文本的共享特征，研究规模效应。</p><p><b>本项目提案：</b>用于讨论共享模型容量和多任务权衡。</p><p><b>限制：</b>扩容实验不属于低成本附加模块。</p><p><b>日期记录：</b>5 Dec 2024 ( ), last revised 10 Apr 2025 (this version, v4)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2024-12-05</td><td>架构</td><td>用于讨论共享模型容量和多任务权衡。</td><td>高</td></tr>
+<tr class="paper" data-priority="背景" data-year="2024" data-family="架构" data-date="2024-10-17" data-search="janus: decoupling visual encoding for unified multimodal understanding and generation janus 架构 分离理解与生成编码，共享 transformer。 保留 st-gcn 与 kl-vae 两条入口，作为已有设计来源。 原版离散图像 ce 不能描述当前连续扩散实现。">
+<td><span class="badge ">背景</span></td>
+<td><a href="https://arxiv.org/abs/2410.13848" target="_blank" rel="noopener">Janus: Decoupling Visual Encoding for Unified Multimodal Understanding and Generation</a><small>2410.13848 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>分离理解与生成编码，共享 Transformer。</p><p><b>本项目提案：</b>保留 ST-GCN 与 KL-VAE 两条入口，作为已有设计来源。</p><p><b>限制：</b>原版离散图像 CE 不能描述当前连续扩散实现。</p><p><b>日期记录：</b>17 Oct 2024</p><p><b>代码：</b><a href="https://github.com/deepseek-ai/Janus" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2024-10-17</td><td>架构</td><td>保留 ST-GCN 与 KL-VAE 两条入口，作为已有设计来源。</td><td>已具备</td></tr>
+<tr class="paper" data-priority="背景" data-year="2024" data-family="架构" data-date="2024-09-27" data-search="emu3: next-token prediction is all you need emu3 架构 将视觉、文本等表示成离散 token，统一 next-token prediction。 统一 token 路线和数据配比的背景。 当前连续生成系统不能直接沿用 token ce。">
+<td><span class="badge ">背景</span></td>
+<td><a href="https://arxiv.org/abs/2409.18869" target="_blank" rel="noopener">Emu3: Next-Token Prediction is All You Need</a><small>2409.18869 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>将视觉、文本等表示成离散 token，统一 next-token prediction。</p><p><b>本项目提案：</b>统一 token 路线和数据配比的背景。</p><p><b>限制：</b>当前连续生成系统不能直接沿用 token CE。</p><p><b>日期记录：</b>27 Sep 2024</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2024-09-27</td><td>架构</td><td>统一 token 路线和数据配比的背景。</td><td>高</td></tr>
+<tr class="paper" data-priority="背景" data-year="2024" data-family="架构" data-date="2024-06-17" data-search="autoregressive image generation without vector quantization mar 架构 连续 token 的条件概率通过小扩散网络表示，支持 masked ar。 当前外层 mar 与内层 per-token diffusion 的直接方法来源。 解释来源时应同时引用 mar/momadiff，不能全部归给 janus。">
+<td><span class="badge ">背景</span></td>
+<td><a href="https://arxiv.org/abs/2406.11838" target="_blank" rel="noopener">Autoregressive Image Generation without Vector Quantization</a><small>2406.11838 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>连续 token 的条件概率通过小扩散网络表示，支持 masked AR。</p><p><b>本项目提案：</b>当前外层 MAR 与内层 per-token diffusion 的直接方法来源。</p><p><b>限制：</b>解释来源时应同时引用 MAR/MoMADiff，不能全部归给 Janus。</p><p><b>日期记录：</b>17 Jun 2024 ( ), last revised 1 Nov 2024 (this version, v3)</p><p><b>代码：</b><a href="https://github.com/LTH14/mar" target="_blank" rel="noopener">仓库地址</a> · 已检查仓库/README，未复现</p></details></td>
+<td>2024-06-17</td><td>架构</td><td>当前外层 MAR 与内层 per-token diffusion 的直接方法来源。</td><td>已具备</td></tr>
+<tr class="paper" data-priority="背景" data-year="2024" data-family="架构" data-date="2024-05-16" data-search="chameleon: mixed-modal early-fusion foundation models chameleon 架构 早融合离散图像与文本，以统一 token 序列建模。 作为完全共享离散入口的历史对照。 全量预训练成本高；官方模型释放范围须另核实。">
+<td><span class="badge ">背景</span></td>
+<td><a href="https://arxiv.org/abs/2405.09818" target="_blank" rel="noopener">Chameleon: Mixed-Modal Early-Fusion Foundation Models</a><small>2405.09818 · 原始摘要核查</small>
+<details><summary>迁移到 SignJanus 的细节</summary><p><b>作者方法：</b>早融合离散图像与文本，以统一 token 序列建模。</p><p><b>本项目提案：</b>作为完全共享离散入口的历史对照。</p><p><b>限制：</b>全量预训练成本高；官方模型释放范围须另核实。</p><p><b>日期记录：</b>16 May 2024 ( ), last revised 21 Mar 2025 (this version, v2)</p><p><b>代码：</b>本次未逐项检查发布状态</p></details></td>
+<td>2024-05-16</td><td>架构</td><td>作为完全共享离散入口的历史对照。</td><td>高</td></tr></tbody></table></div>
+<p class="footer">覆盖边界：系统关键词检索和相关工作追溯，不宣称所有文献均已穷尽；原始摘要核对与方法章节阅读不是复现。P0/P1/P2 是针对当前代码的判断，全部迁移均未实现或验证。会议年份可能晚于首次提交年份。图像性能、速度倍数与推荐 GPU 设置不能直接当作手语结果。生成采用给定长度；当前按用户要求用 test 选模，正式结果应披露相应协议。</p>
+</main><script>
+"use strict";
+const controls=["search","priority","year","family","sort"].map(id=>document.getElementById(id));
+const paperRows=Array.from(document.querySelectorAll("tr.paper"));
+const ranks={P0:0,P1:1,P2:2,"必读":3,"背景":4};
+function refresh(){
+ const [q,p,y,f,s]=controls.map(e=>e.value.toLowerCase());
+ let n=0;
+ for(const row of paperRows){const d=row.dataset;const visible=(!q||d.search.includes(q))&&(!p||d.priority.toLowerCase()===p)&&(!y||d.year===y)&&(!f||d.family.toLowerCase()===f);row.hidden=!visible;if(visible)n++;}
+ const sorted=[...paperRows].sort((a,b)=>s==="recent"?b.dataset.date.localeCompare(a.dataset.date):(ranks[a.dataset.priority]-ranks[b.dataset.priority]||b.dataset.date.localeCompare(a.dataset.date)));
+ const tbody=document.getElementById("body");for(const row of sorted)tbody.appendChild(row);
+ document.getElementById("count").textContent="显示 "+n+" / "+paperRows.length+" 篇 · 展开细节查看限制与代码核查状态";
+}
+for(const el of controls)el.addEventListener(el.id==="search"?"input":"change",refresh);
+document.getElementById("reset").addEventListener("click",()=>{for(const el of controls)el.value=el.id==="sort"?"priority":"";refresh();});
+refresh();
+</script></body></html>

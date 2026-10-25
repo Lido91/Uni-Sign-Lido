@@ -447,8 +447,12 @@ class S2T_Dataset(Base_Dataset):
         if pose_root_override:
             self.pose_dir = pose_root_override.format(phase)
             # Alternative pose sources (e.g. FK-projected poses) may not cover
-            # every label entry; keep only entries whose pickle exists
-            available = set(os.listdir(self.pose_dir))
+            # every label entry (or a whole non-train split); keep only
+            # entries whose pickle exists
+            if phase != 'train' and not os.path.isdir(self.pose_dir):
+                available = set()
+            else:
+                available = set(os.listdir(self.pose_dir))
             kept = [k for k in self.list
                     if self.raw_data[k]['video_path'].replace('.mp4', '.pkl')
                     in available]

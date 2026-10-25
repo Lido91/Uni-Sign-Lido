@@ -33,7 +33,7 @@ vae_args="--vae_checkpoint $vae_root/net_best_hand.pth --vae_mean_path $vae_root
 # every stage and acts as the back-translation judge.
 slt_ckpt=/data/hwu/Uni_sign_repo/out/how2sign_pose_only/how2sign_pose_only_slt.pth
 
-gpus=localhost:0,1,2,3
+gpus=localhost:2,3
 port=29515
 
 wandb_args="--use_wandb --wandb_project uni-sign-unified"

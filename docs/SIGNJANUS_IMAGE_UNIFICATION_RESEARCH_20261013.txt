@@ -1,0 +1,886 @@
+SignJanus 图像统一理解与生成调研
+核查日期：2026-10-13
+范围：70 篇原始论文页面；其中 23 篇于 2026 年首次提交，17 篇进一步核查方法章节。另检查部分作者仓库与 README。未复现图像论文结果，未运行训练，未修改模型或训练代码。该清单是系统搜索的结果，不声称穷尽所有文献。
+首次提交日期与会议年份分别理解：例如 JanusFlow 最早为 2024 年预印本、CVPR 2025；SRUM 最早为 2025 年预印本、作者标注 ECCV 2026。不能全部写作“2026 年新方法”。
+每条“手语迁移”是根据当前代码提出的研究方案，不是论文已证明的手语实验结果。
+
+一、先回答当前两个问题
+
+1. 当前方法与 JanusFlow 的关系
+
+共同设计：理解和生成的入口分开；共享语言主干；生成使用连续 VAE latent；理解输出文字；分阶段解冻。
+
+决定性差异：
+当前：文本和 masked/已生成 latent slots → mT5 encoder → 条件 c；内层带噪 latent z_t 与扩散时间 t → 独立 MLP → 预测干净 latent x0。每次外层 MAR 计算一次条件，内层 DDIM 多步复用条件。
+JanusFlow：文本、生成编码器处理的当前带噪 latent z_t、时间 t → 共享 LLM → 生成解码器 → 速度 v；Euler 更新 z_t，每一步都重新处理当前带噪状态。
+当前不是“将全部 JanusFlow 模块缩成手语版本”。它结合了 Janus 的编码解耦思路、MAR/DiffLoss 的连续 token 建模以及 MoMADiff 式手语生成接口。
+
+原版 JanusFlow 使用 rectified flow 的线性插值与速度目标，当前使用 DDPM 前向加噪、x0 MSE 和 DDIM；仅改变 sampler 名字不构成 flow。
+原版 JanusFlow 把 REPA 对齐作用于 LLM 内的带噪生成表示，当前统一训练只有 SLT CE 和生成 MSE，尚无该对齐项。
+原版 CFG 在速度输出上混合条件和无条件结果；当前在进入非线性 MLP 前混合条件向量。两者一般不等价。
+当前还有外层 MAR，JanusFlow 没有这层逐批填 latent 的过程。
+训练课程也不完全相同：当前 Stage 1 为生成适配器训练，Stage 2/3 为联合训练；JanusFlow 的统一预训练还混合文本任务。相同的“三阶段”名称不能证明流程完全相同。
+
+代码依据：
+models_unified.py:250 _encoder_cond
+models_unified.py:272 forward_t2p
+models_unified.py:336 generate_pose
+models_unified.py:391-409 条件 CFG 与 eta=0 DDIM
+diffusion_head.py:106 MLP_Denoiser.forward
+diffusion_head.py:140 LDM.forward
+train_unified.py 联合任务与阶段冻结设置
+原论文方法：https://arxiv.org/html/2411.07975v2
+
+2. 可以加入 REPA，而且无需先改成 flow
+
+建议优先实现对扩散 MLP 的中间特征做对齐。它接收带噪 latent 和扩散时间，更接近 REPA 的“从带噪生成表示预测干净语义特征”。
+教师：冻结 SLT checkpoint 中的 pose encoder，包括需要的 ST-GCN 与投影；eval 模式、停止梯度。REPA 本身无需额外维护完整 mT5 教师副本。
+学生：diffusion_head.py 的 MLP 中间 hidden，加入可训练投影头。当前接口只返回 x0，实施时需提供可选中间特征返回路径。
+时间轴：当前 ST-GCN 逐帧输出 T 个特征；KL-VAE 输出 floor(T/4) 个 latent。先裁到相同真实有效长度，以四帧聚合为首个对照方案；后续可以比较与 codec 感受野更贴合的聚合。不能仅因张量长度接近就认为位置已对齐。
+mask：聚合教师特征后，按 forward_t2p 的 mask 取对应受监督位置；排除 padding 和不可观测的目标。GT confidence 的位置映射需明确记录。
+目标可写为：
+L_align = mean_valid [1 - cosine(P(h_gen(z_t,t,c)), stop_gradient(E_pose(x_gt)))]
+L_total = w_slt L_slt + w_diff L_diff + lambda_align L_align
+这是手语移植方案；P 是新增投影头，教师目标来自 GT pose，而不是文字本身。
+推理时不计算教师或对齐损失，不需要 GT pose 语义特征。
+
+条件特征对齐可作为单独消融：将 cond_out_head 输出对齐到教师。它更容易加，但 mT5 当前不读取内层 z_t，所以应称为条件语义对齐，不能直接声称复现原版 REPA 的带噪特征对齐。
+Stage 1 可先只训练生成模块与投影，保持现有 mT5 冻结；Stage 2/3 再观察共享主干是否受益。Stage 3 的学生 ST-GCN 即使解冻，也应保留独立冻结教师以减少目标漂移。
+可能失败点：SLT 特征过于强调句义、忽略手型；教师的时间窗口与 VAE 不一致；新 loss 或投影梯度压过扩散损失。首轮建议全句/时间对齐，之后再比较手部特征与 body/face 特征。
+应记录对齐前后的 SLG 手部 DTW、回译、SLT BLEU 与可视化，不以 cosine 上升代替生成质量证据。
+原论文：https://arxiv.org/html/2410.06940v4
+JanusFlow 的对应公式及 stop-gradient：https://arxiv.org/html/2411.07975v2
+
+二、当前系统可改进的接口
+
+现有理解：69 个关节及 confidence → 按部位 ST-GCN → pose_proj → mT5 encoder → mT5 decoder。
+现有生成：文字 → mT5 encoder 与 masked latent slots → cond_out_head → 512D per-token MLP diffusion → 冻结 KL-VAE decoder → 138D 2D pose。
+现有共享：mT5 encoder 参数与联合监督目标。它证明两任务共同训练，尚不等于证明互相提升。
+现有评测：置信度遮掩的累计 DTW-MPJPE2D，分 body、双手、face、all，hand 为左右手均值；回译在独立 evaluator。
+当前 generate_pose 需要给定长度，尚无 text-to-length predictor。GT 长度实验可以保留，但与预测长度系统的比较应分别呈现。
+当前 SLT forward 的标量 loss 含 label smoothing，并截断到 max_length=50。奖励模块若计算原句 likelihood，应读取 logits，使用一致的完整目标 token，排除 padding，明确 EOS 和截断规则，不能把负的平滑 CE 直接称为原文的 reward。
+当前 512D latent 的通道混合身体各部位。21 个手关节不能直接对应其中 21 个 latent channel；图像区域奖励的空间映射需要重新设计。
+当前生成函数由 no_grad 修饰。它能用于黑盒 rollout，但端到端可微回译训练不能直接沿用这个函数。
+当前 DDIM eta=0 的逐步转移是确定的，除随机初始噪声外没有所需的非退化逐步 Gaussian action likelihood。标准连续策略 RL 必须另建随机转移和概率路径，终端零方差步骤也需要处理。
+
+三、最值得读透的路线
+
+A. REPA / JanusFlow：语义教师约束带噪生成表示
+优先级 P0。目标是在保持细节生成表示的同时，减少“动作数值接近却没有句义”的问题。最小改动是冻结 pose encoder、添加中间投影与时间对齐 loss。保持旧 x0 扩散和 VAE，用等预算实验隔离新监督的收益。
+来源：https://arxiv.org/abs/2410.06940
+来源：https://arxiv.org/abs/2411.07975
+
+B. RecA：用理解 embeddings 条件重建
+优先级 P0。原文用理解编码器的密集表示替代稀疏 caption 来重建输入，针对共享参数的模型保留理解 loss。
+手语移植：pose → ST-GCN 语义 tokens → 共享 mT5 与生成头 → 重建同一 pose。它可以检验“SLT 的表示是否保留了生成需要的动作细节”。当前 _encoder_cond 只有文本入口，需增加受控的语义条件入口。
+它和 REPA 不同：REPA 给生成 hidden 一个教师目标；RecA 用教师 embeddings 作为重建条件。重建阶段推理可看 GT pose，但正常文本生成评测不能把 GT embeddings 放进条件。
+RecA 是监督/自监督后训练，不是 RL。保留文本生成训练或比较原文的顺序课程，避免仅学会复制输入。
+原文最新版本还讨论了混合训练的稳定性、训练数据分布与模板近似泄漏；不能只引用最佳分数而忽略数据。
+来源：https://arxiv.org/html/2509.07295v4
+
+C. GvU 与 Read It Back / SpectraReward：把 SLT 变成语义 reward
+优先级 P0。GvU 将原始 prompt 的 token 概率几何均值聚合为 reward；Read It Back 使用平均 log-likelihood。两者均可用 teacher-forced forward 得到。几何均值与平均 logprob 在固定文本的候选排序上单调对应，但用于组内 advantage 时分值尺度不同，必须作为两个变体比较。
+手语移植：
+r_sem(y,x_gen) = (1/N) sum_j log p_frozen_SLT(y_j | x_gen,y_<j)
+对同一句生成多个候选 pose，用冻结 SLT 快照打分。先检验排序能力，再做策略优化。
+优点：不需要先额外标注大规模手语偏好；比逐句 BLEU 更密集；可以检查某些 token 的置信度。
+局限：token reward 不提供 token→动作时间段的可靠对齐；它也可能更多反映语言先验。仅提高 SLT 自己对生成 pose 的信心不证明动作正确。
+来源：https://arxiv.org/html/2603.06043v1
+来源：https://arxiv.org/html/2607.11886v1
+官方代码：https://github.com/matrix0721/GvU
+官方代码：https://github.com/huangrh99/AlphaGRPO
+
+D. DDPO / DanceGRPO：当前连续生成的在线 RL 基线
+优先级 P0。它们将去噪轨迹视为决策过程；组内多个生成结果得到 reward 后优化策略。迁移时动作是连续 latent 转移，不能把 latent 做 softmax 当作图像 token。
+需新建 stochastic rollout、old policy/reference、记录 MAR mask 和上下文、转移 logprob、组优势及策略约束。动作历史在更新时要与采样一致，不能用 GT 的已知 latent 替代真实生成前缀。
+外层 MAR 的顺序若与参数无关，可先固定；奖励作用于完整输出，更新内层条件动作。两层策略的分解需明确。
+只训生成适配器和 MLP 是较保守的起点；若解冻共享 mT5，保留真实 SLT batch 或其他保持约束。
+来源：https://arxiv.org/abs/2305.13301
+来源：https://arxiv.org/abs/2505.07818
+官方代码：https://github.com/XueZeyue/DanceGRPO
+
+E. Diffusion-DPO：离线偏好对照
+优先级 P0。先为同一 caption 生成候选，用独立冻结 SLT 与训练参考 pose 的几何指标构建偏好对，再使用扩散偏好目标。比完整在线 GRPO 的工程路径短，但仍需与当前 DDPM 参数化、MAR 条件一致。
+用成对相同前向噪声和时间采样减少偏好 loss 方差；偏好样本的 mask/context 规则要明确。不能套文字 DPO 的精确序列 logprob。
+把它报告成离线偏好优化，与在线 RL 分开。比较随机偏好、纯回译、纯手部几何、组合偏好，以定位收益来源。
+来源：https://arxiv.org/abs/2311.12908
+
+F. DiffusionNFT 与 DiffusionART：避免常规轨迹 policy gradient 的替代
+优先级 P1。NFT 使用正负反馈的前向加噪训练目标，不需要保存整个反向轨迹 likelihood。当前 rollout 可保留，但至少要保存 clean latent、mask/order、对应条件和 reward，并重推 x0 参数化下的目标。普通“负 advantage 乘 MSE”不是 NFT。
+NFT 原文以 flow/velocity 公式阐述，其隐式正负预测器由 old 和 current 模型构造。若不改变当前 schedule，应推导对应的 x0/epsilon 参数化、时间权重和约束，而不是复制线性 flow 代码。
+ART 用每个 prompt 的 reward 与端点聚合得到改进方向，并施加恢复约束。它刚在 2026-10-08 提交，仓库 10-12 宣布公开。值得复核，但尚无本项目验证。
+图像论文的效率倍数仅是其特定模型、reward、采样设置下的结果，不能直接当作手语预期提速。
+来源：https://arxiv.org/html/2509.16117v2
+来源：https://arxiv.org/html/2610.12572v1
+官方代码：https://github.com/NVlabs/DiffusionNFT
+官方代码：https://github.com/vanzll/DiffusionART
+
+G. UniMRG：给“生成帮助理解”一条可验证的训练路径
+优先级 P0。原文在理解目标之外生成重建、深度和分割。手语可移植为 pose 重建、速度、骨方向或手部结构辅助任务。
+这些目标大部分可以从已有 2D 数据计算，不必假装新增真实 3D 信息。候选实现是在共享理解 hidden 上增加训练专用的辅助预测/生成接口，推理时去掉。
+现有 pose VAE 不保证能编码速度、角度等新目标；需要独立小头或重新定义表示。不要把衍生量直接送到只见过坐标的 VAE 就称为等价实现。
+核心实验：仅加更多 SLT 训练、pose 重建、速度/结构、完整辅助生成，比较 SLT 泛化。若只改善生成而 SLT 不变，不能声称反向增强成立。
+来源：https://arxiv.org/html/2601.21406v3
+官方代码：https://github.com/Sugewud/UniMRG
+
+H. SRUM：全局和局部奖励的监督加权
+优先级 P1。原文冻结理解评估器并缓存全局、区域奖励，再进行奖励加权的 flow 训练及约束。其方法不应被描述为在线 GRPO。
+手语局部反馈可以针对手型、位置、动作顺序与非手部表达，但需要有能力检验这些因素的评估器。当前翻译模型不能可靠回答每个关节是否正确。
+手部 DTW 可作为训练参考下的局部质量信号；它不能自动在混合 latent 通道中定位 hand region。第一版可使用整条候选的组合 reward，后续再考虑时间 credit 或部位解码分支。
+作者仓库 URL 在本次 web 访问返回 404，不能据搜索标题声称完整代码可复现。
+来源：https://arxiv.org/html/2510.12784v2
+
+I. UniRL / CoRL / HermesFlow：双任务后训练
+优先级 P1。它们提供生成、理解反馈及同源偏好或联合策略优化的先例。当前适合先做真实 SLT 数据保持与可信生成数据回放。
+CoRL 的全 AR 图像策略与当前连续动作不同；UniRL 在部分离散表示中使用 straight-through 可微采样，不能当作当前 VAE+no_grad sampler 已支持的梯度路径。
+若只训练生成模块，报告理解指导生成；若进一步训练 SLT，并实际提高 SLT，才讨论双向共同优化。
+来源：https://arxiv.org/abs/2505.23380
+来源：https://arxiv.org/abs/2505.17534
+来源：https://arxiv.org/abs/2502.12148
+
+J. Pareto LoRA / 任务专属适配器
+优先级 P1。当前 SLT CE 与扩散 MSE 的数值尺度不同，1:1 loss 权重不保证梯度平衡。先测共享层上的两任务梯度和各任务的实际退化，再比较比例调整、LoRA 分工、Pareto 整合。
+Pareto LoRA 在 Emu2/CoMM 上研究模态梯度整合。本项目 mT5、ZeRO 优化器和任务定义不同。应有固定权重、简单归一化等对照。
+新的梯度审计论文提示：降低 cosine 冲突不必改善最终任务权衡。以 BLEU/DTW 的 Pareto 曲线为结果，梯度指标只作诊断。
+来源：https://arxiv.org/abs/2606.17296
+来源：https://arxiv.org/abs/2609.38465
+
+四、较大架构改动为何排到后面
+
+1. Show-o2 / BAGEL / SenseNova-U1：重构共享主干的交互与任务分工
+可借鉴语义-细节融合、专属变换、共享注意力交互。当前应先证明新增显式交互优于共享 mT5 基线。完整 MoT、原生 pose-space flow 或 mT5 处理每个 z_t 都涉及 checkpoint、算力、训练稳定性变化。
+图像文献的结论并不统一：JanusFlow 显示解耦及表示对齐的价值；Transferability 比较中某些共享表示模型的跨任务迁移更强；2026-09 的 synergy 研究强调计算分工与共享知识的结合。不同模型与数据使这些结果不能简化成“共享一定最好”或“解耦一定最好”。
+来源：https://arxiv.org/abs/2506.15564
+来源：https://arxiv.org/abs/2505.14683
+来源：https://arxiv.org/abs/2605.12500
+来源：https://arxiv.org/abs/2607.04423
+来源：https://arxiv.org/abs/2609.01607
+
+2. RAE / BLIP3-o / UniLiP / TokenFlow / WinTok / UniTok
+若当前 VAE 已损失手指细节，优化扩散头不能恢复 codec 没保留的内容。先测 VAE 重建与回译上限，再决定重训语义 codec。
+RAE 的手语版可以尝试冻结 ST-GCN 编码器加 pose decoder，但 ST-GCN 对关节做了池化，可能不可逆；“用语义 latent”本身不保证精细手型。
+重训 codec 后原 latent 统计与生成 checkpoint 的兼容性不能默认成立。
+这些路线适合第二版架构论文，不适合全部混入首轮 RL 消融。
+来源：https://arxiv.org/abs/2510.11690
+来源：https://arxiv.org/abs/2505.09568
+来源：https://arxiv.org/abs/2605.18115
+
+3. T2I-R1 / UniGRPO(2026) / UMM-Reflection
+规划与多轮修复有潜力，但需要文本规划任务、pose 条件编辑接口和轨迹数据。现有 SLT decoder 只训练翻译，不具备天然的手语诊断能力。
+可以借鉴紧凑可验证规划，而不是先生成冗长自由文本 CoT。多轮 RL 必须给规划文字和动作转移分别提供正确概率。
+MMaDA 的 UniGRPO 与 2026 reasoning-driven visual generation 的 UniGRPO 是不同工作，不要只凭算法名字合并实现。
+来源：https://arxiv.org/abs/2505.00703
+来源：https://arxiv.org/abs/2603.23500
+来源：https://arxiv.org/abs/2609.35767
+
+五、建议的训练与实验顺序
+
+阶段 0：建立 codec 和 reward 的可信上限
+沿用已有 back_translation_eval.py 的 gt、gt_conf1、vae_recon、gen 模式；验证真实 pose、confidence=1、codec 重建、生成四类输入的回译差异。
+冻结 SLT snapshot；对同一句 K 个候选记录平均 logprob、几何误差与人工抽检。加入错配 caption、时间顺序扰动等负例，但确认负例在手语语义上确实错误。
+检查 reward 是否区分真实动作、坏动作和空/随机动作，防止只奖励语言先验。
+对奖励的词级细节、完整句覆盖、confidence 分布和教师输入坐标裁剪进行统一。生成 conf=1 与训练 confidence 不同，应保留 gt_conf1 对照。
+
+阶段 1：最小监督改动
+E0 现有联合训练。
+E1 等训练预算的继续联合训练。
+E2 扩散中间 REPA。
+E3 条件 feature alignment（与 E2 区分）。
+E4 RecA 条件重建。
+E5 E2 + E4（在单项有效后再组合）。
+保持 codec、数据、推理步数、长度规则和总训练预算一致。额外 pose 数据若用于重建，给对照相同数据访问量。
+
+阶段 2：离线偏好
+同一 caption 生成候选，构建 pure semantic、pure geometry、semantic+hand 等偏好设置，训练 Diffusion-DPO 基线。
+先给出候选排序改善的证据，再做偏好优化。Best-of-N 的开销和收益单列，不能和单样本生成直接混报。
+测试时排序只能使用实际可用的 caption 和冻结 reward；参考 GT pose 的排序应标为 oracle diagnostic。
+
+阶段 3：连续 online RL
+DDPO/DanceGRPO 路线要求 stochastic rollout 和正确 transition logprob。
+NFT 路线可以省去反向 likelihood，但仍需推导当前参数化和 MAR 条件下的正负目标。
+首轮可使用小组候选数和短采样日程，之后核查与正式采样的质量差异；不能据图像仓库的 GPU 设置推出本项目显存或耗时。
+优先更新生成适配器、MLP 和新增投影。逐步评估解冻共享 mT5，并保留真实 SLT 监督。
+维持不同奖励分量的日志，保存参考策略和 reward snapshot。reward 分数上升不作为独立成功标准。
+
+阶段 4：证明生成帮助翻译
+引入 UniMRG 式辅助结构监督，或仅回放独立教师筛出的生成样本。
+比较 SLT-only、joint、joint+alignment、joint+RL、joint+reverse-supervision。
+若预算允许，至少多个随机种子并报告波动；单次 smoke 不构成论文结论。
+
+六、奖励组合：手语迁移提案
+
+基础语义：
+r_sem = mean_token log p_frozen_SLT(caption | generated_pose)
+它来自 GvU/Read It Back 类思路。
+
+有训练参考 pose 时的几何：
+r_hand = - phi(confidence_masked_accumulated_DTW_hand(generated_pose, reference_pose))
+phi 可使用明确记录的有界或长度尺度变换，以防长句累计距离压过其他 reward。它只属于训练奖励；正式评测仍报告原始累计 DTW-MPJPE2D，不能悄悄改成路径平均。
+原生手部坐标是 wrist-local；手部 DTW 侧重局部形态，手的位置和全身协调仍需 body/腕部等参考。
+
+时序与结构：
+r_structure 可检查与训练参考的骨方向、速度范围和异常跳变。不要一味惩罚运动量或高速动作，那会鼓励静止或过度平滑的手语。
+2D 骨架约束不能证明真实 3D 物理正确性，也不能替代符号学、手型、口型及语法的评价。
+
+组合候选：
+R = a*r_sem + b*r_hand + c*r_structure
+先分量实验，再组合。没有 reference 的文本-only prompt 可以使用语义 reward 和无参考质量约束；不要宣称它也有 reference DTW 奖励。
+如果使用同一模型的理解分支作为内部 reward，固定快照以减少移动目标，并用独立 SLT judge/人工抽检做外部验证；否则可能出现两分支共同迎合错误评分。
+闭环回译本身并非新的图像领域贡献。手语研究需要围绕置信度、局部手型、时间对齐与真实双向收益提出有实验支持的区别。
+
+七、评估和贡献的边界
+
+验证理解→生成：冻结生成 codec，在等预算下仅增加理解相关监督，测手部 DTW、回译、质量与多样性。
+验证生成→理解：只增加生成/重建辅助目标，测真实手语的 SLT，并和额外 SLT 训练对照。
+证明共享有用：独立两个模型、同样数据访问量的联合基线、显式对齐模型对比。
+证明 RL 有用：继续 SFT、Best-of-N、离线偏好、在线 RL 不能混成一个增益。
+证明 reward 有效：语义、局部手部、时序分量消融；用未参与优化的 evaluator 检验。
+保持各数据集分开：How2Sign 和 OpenASL 都应有独立结果及适用的消融，而不是只在一个数据集论证组件、在另一个只列最终分数。
+当前代码按用户要求使用 test 选模。调研保持该设置，不改数据划分；这样的结果应明确标注选模协议。论文若需要独立泛化结论，终评集合须未参与 reward 拟合或 checkpoint 选择。
+当前生成采用给定/GT 长度。若对照使用预测长度，应分开报告该条件。
+当前 hand DTW 是原生归一化 2D 坐标的累计误差，与毫米 3D MPJPE、路径平均 DTW 或图像论文指标都不同。
+本报告提出的实验均未执行，没有声称任何模块已带来 BLEU 或 DTW 增益。
+
+八、可以支持的论文故事
+
+当前已实现的故事：通过理解与重建入口解耦，在共享 mT5 上联合训练手语翻译与连续 latent 生成。
+有待实验支持的扩展：
+理解分支保留的语义知识，先通过带噪特征对齐帮助生成，再通过冻结理解 reward 指导后训练；
+手语专属的手部与时序反馈补充全句语义；
+结构生成监督进一步改善真实手语理解。
+如果只得到 SLG 增益，就应描述理解指导生成；如果 SLT 和 SLG 都有等预算下的增益，再描述双向增强。
+图像统一、表示对齐、自奖励、循环一致性和联合 RL 均已有先例。本项目不能仅凭“SLT+SLG+RL”三个名字就宣称首次或独特。
+
+九、完整候选清单
+
+以下每条均包含原始论文链接、作者方法概括与本项目迁移判断。P0 为首轮优先，P1 为后续高价值适配，P2 为较大改造或先验证可行性的方向。“背景”指已有来源；“必读”指协同诊断与评估工作。改动成本是相对于现有代码的定性判断，不是 GPU 时长估计。
+1. Training Diffusion Models with Reinforcement Learning
+首次提交：2023-05-22；分类：连续生成RL；优先级：P0；改动成本：中高
+原始来源：https://arxiv.org/abs/2305.13301
+作者方法：把扩散去噪视为多步决策，利用逐步 Gaussian 转移做策略优化。
+迁移提案：作为当前 DDPM 连续生成 RL 的基础实现对照。
+限制：需要随机转移、正确 mask 与 reference，而非 softmax latent。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+2. Diffusion Model Alignment Using Direct Preference Optimization
+首次提交：2023-11-21；分类：连续生成RL；优先级：P0；改动成本：中
+原始来源：https://arxiv.org/abs/2311.12908
+作者方法：使用扩散 likelihood 的变分近似构建偏好优化目标。
+迁移提案：用冻结 SLT 与手部 DTW 排序生成对，做离线扩散偏好训练。
+限制：是偏好优化基线，不应与在线 GRPO 混称；MAR 条件需一致。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+3. Using Human Feedback to Fine-tune Diffusion Models without Any Reward Model
+首次提交：2023-11-22；分类：连续生成RL；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2311.13231
+作者方法：直接利用偏好指导扩散去噪，省去显式奖励模型。
+迁移提案：补充 Diffusion-DPO 与在线策略训练的偏好基线。
+限制：最终样本的偏好不必在每个中间去噪状态成立。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+4. Chameleon: Mixed-Modal Early-Fusion Foundation Models
+首次提交：2024-05-16；分类：架构；优先级：背景；改动成本：高
+原始来源：https://arxiv.org/abs/2405.09818
+作者方法：早融合离散图像与文本，以统一 token 序列建模。
+迁移提案：作为完全共享离散入口的历史对照。
+限制：全量预训练成本高；官方模型释放范围须另核实。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+5. Autoregressive Image Generation without Vector Quantization
+首次提交：2024-06-17；分类：架构；优先级：背景；改动成本：已具备
+原始来源：https://arxiv.org/abs/2406.11838
+作者方法：连续 token 的条件概率通过小扩散网络表示，支持 masked AR。
+迁移提案：当前外层 MAR 与内层 per-token diffusion 的直接方法来源。
+限制：解释来源时应同时引用 MAR/MoMADiff，不能全部归给 Janus。
+阅读深度：原始摘要核查
+代码：https://github.com/LTH14/mar；状态：repository_readme_inspected
+
+6. Transfusion: Predict the Next Token and Diffuse Images with One Multi-Modal Model
+首次提交：2024-08-20；分类：架构；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2408.11039
+作者方法：同一 Transformer 对文本做 CE，对连续图像做扩散。
+迁移提案：若重构统一主干，可让共享网络直接处理带噪手语 latent。
+限制：当前 mT5 编码器加独立 MLP 不等于原文混合序列 Transformer。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+7. Show-o: One Single Transformer to Unify Multimodal Understanding and Generation
+首次提交：2024-08-22；分类：架构；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2408.12528
+作者方法：文本自回归与离散视觉扩散统一于单个 Transformer。
+迁移提案：离散手语 tokenizer 分支的对照架构。
+限制：当前连续 KL-VAE 无分类 token 概率。
+阅读深度：原始摘要核查
+代码：https://github.com/showlab/Show-o；状态：repository_readme_inspected
+
+8. VILA-U: a Unified Foundation Model Integrating Visual Understanding and Generation
+首次提交：2024-09-06；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2409.04429
+作者方法：统一视觉塔对齐离散视觉 token 与文本，以 AR 统一任务。
+迁移提案：离散语义 tokenizer 的基线与对照。
+限制：需要视觉塔或手语 tokenizer 预训练。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+9. Emu3: Next-Token Prediction is All You Need
+首次提交：2024-09-27；分类：架构；优先级：背景；改动成本：高
+原始来源：https://arxiv.org/abs/2409.18869
+作者方法：将视觉、文本等表示成离散 token，统一 next-token prediction。
+迁移提案：统一 token 路线和数据配比的背景。
+限制：当前连续生成系统不能直接沿用 token CE。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+10. Representation Alignment for Generation: Training Diffusion Transformers Is Easier Than You Think
+首次提交：2024-10-09；分类：对齐；优先级：P0；改动成本：中
+原始来源：https://arxiv.org/abs/2410.06940
+作者方法：生成网络中间特征对齐冻结的预训练语义特征。
+迁移提案：冻结 SLT 教师，向生成 MLP 添加投影及有效时间位置的对齐损失。
+限制：时间、部位粒度与 confidence mask 必须匹配。
+阅读深度：方法章节核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+11. Janus: Decoupling Visual Encoding for Unified Multimodal Understanding and Generation
+首次提交：2024-10-17；分类：架构；优先级：背景；改动成本：已具备
+原始来源：https://arxiv.org/abs/2410.13848
+作者方法：分离理解与生成编码，共享 Transformer。
+迁移提案：保留 ST-GCN 与 KL-VAE 两条入口，作为已有设计来源。
+限制：原版离散图像 CE 不能描述当前连续扩散实现。
+阅读深度：原始摘要核查
+代码：https://github.com/deepseek-ai/Janus；状态：repository_readme_inspected
+
+12. JanusFlow: Harmonizing Autoregression and Rectified Flow for Unified Multimodal Understanding and Generation
+首次提交：2024-11-12；分类：对齐；优先级：P0；改动成本：中
+原始来源：https://arxiv.org/abs/2411.07975
+作者方法：分离视觉编码，并将生成中间特征对齐到理解编码器。
+迁移提案：从扩散 MLP 或生成条件特征接投影头，对齐冻结 SLT 的时间特征。
+限制：当前 mT5 不直接处理带噪 latent；属于 REPA 思路移植。
+阅读深度：方法章节核查
+代码：https://github.com/deepseek-ai/Janus；状态：repository_readme_inspected
+
+13. TokenFlow: Unified Image Tokenizer for Multimodal Understanding and Generation
+首次提交：2024-12-04；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2412.03069
+作者方法：语义与像素双码本通过共享索引建立对应。
+迁移提案：构建语义码与手型细节码的对应关系，作为离散替代路线。
+限制：共享索引不等于两个任意编码器输出直接相加。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+14. Liquid: Language Models are Scalable and Unified Multi-modal Generators
+首次提交：2024-12-05；分类：架构；优先级：背景；改动成本：高
+原始来源：https://arxiv.org/abs/2412.04332
+作者方法：学习离散图像码与文本的共享特征，研究规模效应。
+迁移提案：用于讨论共享模型容量和多任务权衡。
+限制：扩容实验不属于低成本附加模块。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+15. Janus-Pro: Unified Multimodal Understanding and Generation with Data and Model Scaling
+首次提交：2025-01-29；分类：训练；优先级：P1；改动成本：中
+原始来源：https://arxiv.org/abs/2501.17811
+作者方法：优化课程、数据配比和规模。
+迁移提案：检验任务配比、质量筛选、SLT 保持训练与生成解冻课程。
+限制：数据扩展与模型扩容的收益不能归因给新模块。
+阅读深度：原始摘要核查
+代码：https://github.com/deepseek-ai/Janus；状态：repository_readme_inspected
+
+16. HermesFlow: Seamlessly Closing the Gap in Multimodal Understanding and Generation
+首次提交：2025-02-17；分类：奖励闭环；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2502.12148
+作者方法：同源理解和生成偏好对，Pair-DPO 及迭代 self-play。
+迁移提案：同一条 caption/pose 构建 SLT 与 SLG 偏好样本。
+限制：连续生成侧需 Diffusion-DPO 等目标，不能套文本 logprob。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+17. UniTok: A Unified Tokenizer for Visual Generation and Understanding
+首次提交：2025-02-27；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2502.20321
+作者方法：扩大离散表示容量，使用多码本协调语义与重建。
+迁移提案：如重训手语 tokenizer，比较码本容量和语义监督。
+限制：需要重训 codec 并重建生成阶段，不能复用原 latent checkpoint。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+18. Unified Reward Model for Multimodal Understanding and Generation
+首次提交：2025-03-07；分类：奖励闭环；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2503.05236
+作者方法：统一偏好评估器支持排序与打分，并用于多任务 DPO。
+迁移提案：训练手语专用奖励头，对语义、手型、时序等打分。
+限制：图像奖励模型权重不能直接处理当前 2D pose 张量。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+19. Unified Autoregressive Visual Generation and Understanding with Continuous Tokens
+首次提交：2025-03-17；分类：架构；优先级：P1；改动成本：中
+原始来源：https://arxiv.org/abs/2503.13436
+作者方法：连续视觉 token 与离散文本 token 的统一自回归建模。
+迁移提案：参照连续 token 的训练配比与生成、理解之间的权衡。
+限制：参考模型为 decoder-only；当前 mT5 是 encoder-decoder。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+20. Harmonizing Visual Representations for Unified Multimodal Understanding and Generation
+首次提交：2025-03-27；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2503.21979
+作者方法：使用 MAR 编码器同时提供理解与生成表示。
+迁移提案：比较复用 MAR 生成表示进行 SLT，而非独立 ST-GCN。
+限制：需要预训练和主干改造，先做 feature probe 更经济。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+21. UniToken: Harmonizing Multimodal Understanding and Generation through Unified Visual Encoding
+首次提交：2025-04-06；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2504.04423
+作者方法：混合连续语义表示与离散视觉表示。
+迁移提案：研究双入口保留细节和语义，再进行受控融合。
+限制：不是当前连续 latent 原样附加一个离散 token 即可。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+22. Transfer between Modalities with MetaQueries
+首次提交：2025-04-08；分类：架构；优先级：P1；改动成本：中
+原始来源：https://arxiv.org/abs/2504.06256
+作者方法：可学习 queries 连接冻结 MLLM 与扩散解码器。
+迁移提案：替换或增强现有 mask slots，用时序 queries 抽取文本语义。
+限制：已有 mask embedding 和时间位置；新 query 必须与现状公平比较。
+阅读深度：原始摘要核查
+代码：https://github.com/facebookresearch/metaquery；状态：repository_readme_inspected
+
+23. REPA-E: Unlocking VAE for End-to-End Tuning with Latent Diffusion Transformers
+首次提交：2025-04-14；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2504.10483
+作者方法：借助表示对齐联合训练 VAE 和扩散模型。
+迁移提案：只有发现 VAE 明显限制手型或语义时，才研究 codec 联合调优。
+限制：改变 VAE 会使旧 latent 统计和生成权重失配。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+24. T2I-R1: Reinforcing Image Generation with Collaborative Semantic-level and Token-level CoT
+首次提交：2025-05-01；分类：推理修复；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2505.00703
+作者方法：语义级 CoT 与视觉 token 生成过程协同 GRPO。
+迁移提案：未来让文本规划描述手型、位置、轨迹和非手部表达。
+限制：现有文本只有 caption，无规划监督；离散 token CoT 不适用连续头。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+25. Flow-GRPO: Training Flow Matching Models via Online RL
+首次提交：2025-05-08；分类：连续生成RL；优先级：P1；改动成本：高
+原始来源：https://arxiv.org/abs/2505.05470
+作者方法：将 flow 的确定性 ODE 转为可计算转移概率的 SDE 以运行 GRPO。
+迁移提案：若改用 flow，应从此推导采样及 policy ratio。
+限制：现有模型预测 DDPM x0，不是线性 rectified flow。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+26. DanceGRPO: Unleashing GRPO on Visual Generation
+首次提交：2025-05-12；分类：连续生成RL；优先级：P0；改动成本：中高
+原始来源：https://arxiv.org/abs/2505.07818
+作者方法：对连续扩散和 flow 进行分组策略优化。
+迁移提案：当前扩散策略 RL 的核心参考，与 DDPO 一起建立可计算转移 likelihood。
+限制：eta=0 DDIM 不能直接提供非退化的逐步 Gaussian 概率。
+阅读深度：原始摘要核查
+代码：https://github.com/XueZeyue/DanceGRPO；状态：repository_readme_inspected
+
+27. BLIP3-o: A Family of Fully Open Unified Multimodal Models-Architecture, Training and Dataset
+首次提交：2025-05-14；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2505.09568
+作者方法：生成富语义 CLIP 特征，并利用生成解码器还原图像。
+迁移提案：训练可解码的手语语义 latent，比较重建 latent 与语义 latent。
+限制：现有 ST-GCN 的池化特征可能已丢失精细手型。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+28. Emerging Properties in Unified Multimodal Pretraining
+首次提交：2025-05-20；分类：架构；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2505.14683
+作者方法：Mixture-of-Transformers 联合处理理解与生成，支持交错序列。
+迁移提案：研究共享交互、任务专属变换的轻量版本。
+限制：完整 MoT 涉及主干改写和额外参数，不是加入一个普通 MoE。
+阅读深度：原始摘要核查
+代码：https://github.com/ByteDance-Seed/Bagel；状态：repository_readme_inspected
+
+29. UniGen: Enhanced Training & Test-Time Strategies for Unified Multimodal Understanding and Generation
+首次提交：2025-05-20；分类：奖励闭环；优先级：P1；改动成本：低到中
+原始来源：https://arxiv.org/abs/2505.14682
+作者方法：DPO 后训练及 CoT 验证，支持 Best-of-N。
+迁移提案：先用冻结 SLT 奖励做候选排序，审计 reward 是否选得更好。
+限制：Best-of-N 是推理策略；不是 RL 训练收益。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+30. MMaDA: Multimodal Large Diffusion Language Models
+首次提交：2025-05-21；分类：架构；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2505.15809
+作者方法：离散多模态扩散、混合 CoT 和 UniGRPO。
+迁移提案：借鉴混合后训练和任务奖励设计。
+限制：其离散扩散概率不适用于当前连续 DDIM。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+31. Co-Reinforcement Learning for Unified Multimodal Understanding and Generation
+首次提交：2025-05-23；分类：奖励闭环；优先级：P1；改动成本：高
+原始来源：https://arxiv.org/abs/2505.17534
+作者方法：统一 RL 后再做任务特定 RL；联合语义与周期一致性奖励。
+迁移提案：在成熟 SLG-RL 后，加入 SLT 的文本策略优化和真实数据回放。
+限制：原文基于全 AR；两种动作空间的概率和奖励尺度要分别定义。
+阅读深度：方法章节核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+32. UniRL: Self-Improving Unified Multimodal Models via Supervised and Reinforcement Learning
+首次提交：2025-05-29；分类：奖励闭环；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2505.23380
+作者方法：生成数据供理解学习，理解反馈再用于生成；研究 SFT 与 GRPO。
+迁移提案：SLG 产生候选手语，冻结教师筛选，再回放给 SLT。
+限制：原文部分架构使用离散可微采样；连续系统需另建梯度路径。
+阅读深度：方法章节核查
+代码：https://github.com/showlab/UniRL；状态：repository_readme_inspected
+
+33. OpenUni: A Simple Baseline for Unified Multimodal Understanding and Generation
+首次提交：2025-05-29；分类：架构；优先级：P1；改动成本：中
+原始来源：https://arxiv.org/abs/2505.23661
+作者方法：学习 queries 和轻量 connector，连接 MLLM 与扩散模型。
+迁移提案：以 connector/query 作为当前 cond_out_head 的可控替代。
+限制：仅增大 connector 可能解释参数收益，需等参数对照。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+34. ReasonGen-R1: CoT for Autoregressive Image generation models through SFT and RL
+首次提交：2025-05-30；分类：推理修复；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2505.24875
+作者方法：先用理由轨迹 SFT，再 GRPO 优化自回归图像生成。
+迁移提案：先研究紧凑手语计划，再比较直接生成。
+限制：计划正确性与动作可实现性须独立评估。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+35. UniWorld-V1: High-Resolution Semantic Encoders for Unified Visual Understanding and Generation
+首次提交：2025-06-03；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2506.03147
+作者方法：高分辨率语义编码用于理解、生成与操作。
+迁移提案：评估增加手部细节分辨率、减少关节池化损失。
+限制：图像作者对闭源模型的推测不能当作已证实的内部架构。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+36. Show-o2: Improved Native Unified Multimodal Models
+首次提交：2025-06-18；分类：架构；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2506.15564
+作者方法：VAE 空间中融合语义与细节两条路径，文本 AR、视觉 flow。
+迁移提案：尝试时间对齐的 SLT 特征与生成 latent 融合，或双路径蒸馏。
+限制：推理生成侧不能使用 GT 的 SLT 特征；flow 与当前 DDPM 不同。
+阅读深度：方法章节核查
+代码：https://github.com/showlab/Show-o；状态：repository_readme_inspected
+
+37. Ovis-U1 Technical Report
+首次提交：2025-06-29；分类：架构；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2506.23044
+作者方法：统一训练与扩散解码器、双向 token refiner。
+迁移提案：研究扩散前的双向时间条件细化。
+限制：现有 mT5 已双向；额外 refiner 的独立收益必须消融。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+38. MixGRPO: Unlocking Flow-based GRPO Efficiency with Mixed ODE-SDE
+首次提交：2025-07-29；分类：连续生成RL；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2507.21802
+作者方法：仅在滑动窗口使用 SDE 与 GRPO，窗口外使用 ODE。
+迁移提案：连续策略 RL 正确后，再减少需要存储、优化的去噪步骤。
+限制：先确定当前 DDPM 的窗口概率和终端处理，不能照搬 flow 调度。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+39. UniLiP: Adapting CLIP for Unified Multimodal Understanding, Generation and Editing
+首次提交：2025-07-31；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2507.23278
+作者方法：自蒸馏维持 CLIP 语义并训练重建，双条件结合上下文与查询。
+迁移提案：可借鉴 SLT 语义保持与重建条件分工。
+限制：完整方案需要可解码的语义编码器。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+40. Reconstruction Alignment Improves Unified Multimodal Models
+首次提交：2025-09-08；分类：对齐；优先级：P0；改动成本：中
+原始来源：https://arxiv.org/abs/2509.07295
+作者方法：用理解编码器的 dense embeddings 作条件，重建输入，保持理解能力。
+迁移提案：加入 pose→SLT语义→pose 的自监督条件重建，保留真实 SLT 回放。
+限制：监督重建不等于 RL；推理文本生成仍需保持，不可只学复制 pose。
+阅读深度：方法章节核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+41. DiffusionNFT: Online Diffusion Reinforcement with Forward Process
+首次提交：2025-09-19；分类：连续生成RL；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2509.16117
+作者方法：用生成结果的正负反馈在前向加噪训练目标上优化，避免反向轨迹 likelihood。
+迁移提案：可保留现有 rollout，缓存 clean latent、奖励与 MAR 条件，再做负反馈训练。
+限制：需为 x0 参数化与外层 MAR 重新推导；不是负 reward 直接乘 MSE。
+阅读深度：方法章节核查
+代码：https://github.com/NVlabs/DiffusionNFT；状态：repository_readme_inspected
+
+42. RealUnify: Do Unified Models Truly Benefit from Unification? A Comprehensive Benchmark
+首次提交：2025-09-29；分类：评估；优先级：必读；改动成本：低
+原始来源：https://arxiv.org/abs/2509.24897
+作者方法：同时评估理解帮助生成与生成帮助理解，分解瓶颈。
+迁移提案：双向训练必须分别证明 SLT 和 SLG 的收益。
+限制：共享参数或双向接口本身不构成协同证据。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+43. Lumina-DiMOO: An Omni Diffusion Large Language Model for Multi-Modal Generation and Understanding
+首次提交：2025-10-07；分类：架构；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2510.06308
+作者方法：统一离散扩散处理文字和图像，具备生成、编辑与理解。
+迁移提案：作为最大表示共享的对照与跨任务迁移参考。
+限制：当前连续 latent 和 AR 文本 decoder 都不同。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+44. UniFlow: A Unified Pixel Flow Tokenizer for Visual Understanding and Generation
+首次提交：2025-10-12；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2510.10575
+作者方法：语义自蒸馏与 patch-wise pixel flow 解码。
+迁移提案：用语义保持的时序编码器加局部动作解码器。
+限制：手部不是独立图片 patch，跨部位协调需另建约束。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+45. Diffusion Transformers with Representation Autoencoders
+首次提交：2025-10-13；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2510.11690
+作者方法：冻结语义编码器加重建解码器，直接在表示空间扩散。
+迁移提案：用冻结 SLT 编码器训练 pose decoder，测语义空间的手型重建上限。
+限制：ST-GCN 池化可能丢信息，必须先证明可重建，旧 VAE 权重不能沿用。
+阅读深度：方法章节核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+46. SRUM: Fine-Grained Self-Rewarding for Unified Multimodal Models
+首次提交：2025-10-14；分类：奖励闭环；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2510.12784
+作者方法：冻结理解评估器，缓存全局和局部反馈，进行奖励加权训练。
+迁移提案：句义与手部、表情、时间段的局部反馈联合使用。
+限制：不是 GRPO；当前 latent 不按身体部位分区，不能直接乘手部奖励图。
+阅读深度：方法章节核查
+代码：https://github.com/WayneJin0918/SRUM；状态：web_fetch_returned_404_release_not_confirmed
+
+47. UniGen-1.5: Enhancing Image Generation and Editing through Reward Unification in Reinforcement Learning
+首次提交：2025-11-18；分类：奖励闭环；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2511.14760
+作者方法：共享奖励模型联合优化图像生成与编辑。
+迁移提案：在 pose 修复任务建立后，统一生成与修复奖励。
+限制：当前没有编辑接口；先加入编辑会扩大研究范围。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+48. Generation Enhances Understanding in Unified Multimodal Models via Multi-Representation Generation
+首次提交：2026-01-29；分类：对齐；优先级：P0；改动成本：中
+原始来源：https://arxiv.org/abs/2601.21406
+作者方法：辅助生成重建、深度与分割等表示以改善理解。
+迁移提案：移植为 pose 重建、速度、骨方向、手部结构辅助任务，检验 SLG→SLT。
+限制：手语衍生任务是新提案；从 2D 坐标不能得到真实 3D 深度。
+阅读深度：方法章节核查
+代码：https://github.com/Sugewud/UniMRG；状态：repository_readme_inspected
+
+49. UniWeTok: An Unified Binary Tokenizer with Codebook Size $\mathit{2^{128}}$ for Unified Multimodal Large Language Model
+首次提交：2026-02-15；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2602.14178
+作者方法：大型二进制码本、前后蒸馏与生成先验协调语义及重建。
+迁移提案：重训 tokenizer 时参考语义蒸馏与编码容量。
+限制：不是给现有 KL-VAE 换个 codebook 参数即可。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+50. UniG2U-Bench: Do Unified Models Advance Multimodal Understanding?
+首次提交：2026-03-03；分类：评估；优先级：必读；改动成本：低
+原始来源：https://arxiv.org/abs/2603.03241
+作者方法：系统评测生成到理解的迁移，区分多类子任务。
+迁移提案：设计手型、方向、时序、缺失动作等可验证的跨任务探针。
+限制：图像 benchmark 不能直接作为手语终评。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+51. Learning to Generate via Understanding: Understanding-Driven Intrinsic Rewarding for Unified Multimodal Models
+首次提交：2026-03-06；分类：奖励闭环；优先级：P0；改动成本：低到中
+原始来源：https://arxiv.org/abs/2603.06043
+作者方法：利用理解分支对原始文本的 token 概率给生成结果奖励。
+迁移提案：生成 pose 经冻结 SLT 教师，计算原句的 teacher-forced 概率。
+限制：奖励实现便宜，完整生成 RL 仍需要连续扩散优化器。
+阅读深度：方法章节核查
+代码：https://github.com/matrix0721/GvU；状态：repository_readme_inspected
+
+52. UniGRPO: Unified Policy Optimization for Reasoning-Driven Visual Generation
+首次提交：2026-03-24；分类：连续生成RL；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2603.23500
+作者方法：把文本 reasoning GRPO 与 FlowGRPO 放入统一决策过程。
+迁移提案：未来联合优化手语规划文本与连续动作。
+限制：不同于 MMaDA 同名 UniGRPO；当前没有规划与 flow 路径。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+53. Uni-Synergy: Bridging Understanding and Generation for Personalized Reasoning via Co-operative Reinforcement Learning
+首次提交：2026-05-11；分类：奖励闭环；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2605.10445
+作者方法：个性化理解与生成联合 RL，组合奖励并动态选择轨迹。
+迁移提案：用于 signer、风格和上下文控制的后续扩展。
+限制：当前模型没有显式 signer 控制或个性化标签。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+54. SenseNova-U1: Unifying Multimodal Understanding and Generation with NEO-unify Architecture
+首次提交：2026-05-12；分类：架构；优先级：P2；改动成本：很高
+原始来源：https://arxiv.org/abs/2605.12500
+作者方法：NEO-unify 以轻量视觉接口和原生 MoT 直接进行像素与语言建模。
+迁移提案：长期可比较直接 pose-space 生成和 latent-space 生成。
+限制：完整原生架构与现有 checkpoint 不兼容，不能当作小补丁。
+阅读深度：方法章节核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+55. WinTok: A Win-Win Hybrid Tokenizer via Decomposing Visual Understanding and Generation with Transferable Tokens
+首次提交：2026-05-18；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2605.18115
+作者方法：像素 token 外增加语义 token，并做非对称蒸馏。
+迁移提案：将手型细节与句义 token 分开建模，并保留可转移交互。
+限制：是 tokenizer 级改造；增加语义 token 本身不保证手语可重建。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+56. Pareto LoRA: Mitigating Modality Imbalance in Unified Multimodal Models via Pareto-Optimal Gradient Integration
+首次提交：2026-06-15；分类：训练；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2606.17296
+作者方法：针对模态梯度量级和方向不平衡进行 Pareto 梯度整合。
+迁移提案：若使用 LoRA，分别估计 SLT/SLG 共享适配器梯度并比较平衡策略。
+限制：原文 Emu2/CoMM；当前 ZeRO 混合训练及优化器需适配。
+阅读深度：方法章节核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+57. Unified Multimodal Autoregressive Modeling with Shared Context-Visual Tokenizer is Key to Unification
+首次提交：2026-06-16；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2606.18249
+作者方法：UniAR 使用共享 context-visual tokenizer 连接理解与生成。
+迁移提案：探索共享手语条件空间，作为双编码入口的替代对照。
+限制：仅核对摘要，具体量化和训练约束仍需逐节复核。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+58. Ask, Solve, Generate: Self-Evolving Unified Multimodal Understanding and Generation via Self-Consistency Rewards
+首次提交：2026-06-25；分类：奖励闭环；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2606.27376
+作者方法：Proposer、Solver、Generator 内部角色以一致性信号学习。
+迁移提案：有手语属性问答能力后，构建诊断、生成、验证循环。
+限制：目前 SLT 仅翻译，尚不具备通用属性 QA。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+59. SpatialFlow-GRPO: Where Spatial Credit Drives Image Editing
+首次提交：2026-06-25；分类：连续生成RL；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2606.26872
+作者方法：将区域奖励对齐到 latent 区域并优化图像编辑。
+迁移提案：局部手语修复能力建立后，比较手部、面部、身体区域奖励。
+限制：需要区域与 latent 的映射及编辑任务数据。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+60. Transferability Between Understanding and Generation in Unified Multimodal Models
+首次提交：2026-07-05；分类：评估；优先级：必读；改动成本：低
+原始来源：https://arxiv.org/abs/2607.04423
+作者方法：用能力探针测试单任务训练能否迁移到另一任务，比较架构。
+迁移提案：分别只训 SLT 和只训 SLG，测试另一方向，控制数据和计算预算。
+限制：原文图像能力结论不能直接推广为手语因果规律。
+阅读深度：方法章节核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+61. Read It Back: Pretrained MLLMs Are Zero-Shot Reward Models for Text-to-Image Generation
+首次提交：2026-07-13；分类：奖励闭环；优先级：P0；改动成本：低到中
+原始来源：https://arxiv.org/abs/2607.11886
+作者方法：冻结 MLLM，一次 teacher-forced forward 的平均 prompt log-likelihood 作 reward。
+迁移提案：使用冻结 SLT 快照计算完整 caption 的平均 logprob，先做候选排序。
+限制：当前 forward 只返回平滑 CE；必须直接获取未平滑 token logits。
+阅读深度：方法章节核查
+代码：https://github.com/huangrh99/AlphaGRPO；状态：repository_readme_inspected
+
+62. Argus-Unified: Towards A Compact and Economical Unified Model for Image Understanding and Generation
+首次提交：2026-07-28；分类：表示；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2607.25527
+作者方法：冻结语义编码器，理解使用连续 token，生成学习离散 token。
+迁移提案：复用 SLT 编码器，比较连续语义特征和可重建表示。
+限制：当前没有从 ST-GCN 语义到 pose 的量化及重建模块。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+63. When Does Visual Generation Help Visual Understanding in Unified Multimodal Models?
+首次提交：2026-08-23；分类：评估；优先级：必读；改动成本：低
+原始来源：https://arxiv.org/abs/2608.22174
+作者方法：诊断生成视觉辅助何时帮助理解及瓶颈所在。
+迁移提案：研究重建或修复后再翻译，按难度分层并与 oracle 对照。
+限制：生成后再理解增加计算，并不自动改善 SLT。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+64. Uncovering Understanding-Generation Synergy in Native Unified Multimodal Models: From Representation, Task to System
+首次提交：2026-09-01；分类：评估；优先级：必读；改动成本：低
+原始来源：https://arxiv.org/abs/2609.01607
+作者方法：研究表示、任务、系统三个层级的协同与任务分工。
+迁移提案：将共享主干、语义交互、任务专属层分开消融。
+限制：其从原生结构出发的结论与预训练 ST-GCN+mT5 设定不同。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+65. SGA-Flow-GRPO: Spatial Gradient-Guided Credit Assignment for Flow-GRPO
+首次提交：2026-09-26；分类：连续生成RL；优先级：P2；改动成本：高
+原始来源：https://arxiv.org/abs/2609.32340
+作者方法：利用 reward 梯度构建空间 credit，按视觉 token 分配策略更新。
+迁移提案：可研究时间段 credit，或使用部位分解 latent 后的手部 credit。
+限制：普通 DTW、BLEU 是不可微黑盒，现有 latent 也无空间 patch 对应。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+66. Learning Native Reflection in Unified Models with Interleaved Reinforcement Learning
+首次提交：2026-09-28；分类：推理修复；优先级：P2；改动成本：很高
+原始来源：https://arxiv.org/abs/2609.35767
+作者方法：对完整反思、修改序列做统一 RL，共享起始图像来比较策略。
+迁移提案：未来训练生成→识别错误→局部修复的手语多轮轨迹。
+限制：目前翻译 decoder 不支持诊断文本，生成也没有条件编辑接口。
+阅读深度：方法章节核查
+代码：https://github.com/waltstephen/UMM-Reflection；状态：repository_readme_inspected
+
+67. Does Gradient Conflict Predict the Understanding--Generation Trade-off? A Controlled Audit of Conflict-Metric Validity in Unified Multimodal Models
+首次提交：2026-09-29；分类：评估；优先级：必读；改动成本：低
+原始来源：https://arxiv.org/abs/2609.38465
+作者方法：在受控测试中审计梯度冲突指标与真实任务权衡的关系。
+迁移提案：记录梯度范数、夹角，同时直接测 SLT/SLG 性能和功能干扰。
+限制：合成控制实验的负结论不等于所有梯度方法无效。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+68. Recursive Self-Improvement in Unified Multimodal Models
+首次提交：2026-10-02；分类：推理修复；优先级：P2；改动成本：很高
+原始来源：https://arxiv.org/abs/2610.03002
+作者方法：通过程序执行验证生成训练数据，反复改进文字与视觉能力。
+迁移提案：借鉴独立验证与针对失败样本的数据课程。
+限制：图表程序可精确验证，手语语义通常没有同等执行 oracle。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+
+69. DiffusionART: Efficient, Stable and Scalable Reinforcement of Diffusion Models
+首次提交：2026-10-08；分类：连续生成RL；优先级：P1；改动成本：中高
+原始来源：https://arxiv.org/abs/2610.12572
+作者方法：按提示聚合奖励与生成端点，直接指导反向状态，并使用恢复约束。
+迁移提案：作为 NFT/GRPO 后续替代；研究每个 MAR 子动作的聚合奖励方向。
+限制：2026-10-08 新预印本；当前 x0/MAR 的适配尚未验证。
+阅读深度：方法章节核查
+代码：https://github.com/vanzll/DiffusionART；状态：repository_readme_inspected
+
+70. Unsupervised Multimodal Reward Modeling
+首次提交：2026-10-08；分类：奖励闭环；优先级：P2；改动成本：中
+原始来源：https://arxiv.org/abs/2610.12707
+作者方法：冻结 VLM 中间特征上训练轻量奖励头，正 caption 对比扰动 caption。
+迁移提案：用语义负例训练手语奖励头，加入数词、方向、否定、时序等错误。
+限制：新预印本且原文选层仍用标签；普通词替换可能保留正确语义。
+阅读深度：原始摘要核查
+代码：本次未逐项核实；状态：release_not_checked_in_this_research
+

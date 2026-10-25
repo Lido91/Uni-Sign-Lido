@@ -9,6 +9,9 @@
 内容来自当前 `config.py`、`datasets.py`、`models.py` 以及本机实际
 OpenASL/How2Sign label 和 pose 文件。
 
+> 模型架构与端到端数据流的英文概览见
+> [`UNISIGN_MODEL_ARCHITECTURE_AND_DATA_FLOW.md`](UNISIGN_MODEL_ARCHITECTURE_AND_DATA_FLOW.md)。
+
 ## 1. 先澄清：这里不是 OpenPose，也不是 133D motion
 
 当前 OpenASL 和 How2Sign 使用的是 **RTMPose 提取的

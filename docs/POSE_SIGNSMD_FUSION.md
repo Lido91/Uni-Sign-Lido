@@ -96,12 +96,16 @@ Long-clip evaluation also becomes deterministic as a side effect.
 
 | File | Role |
 | --- | --- |
-| `datasets_signsmd.py` | `S2T_Dataset_SignSMD`: baseline dataset + per-sample description loading |
+| `datasets_signsmd.py` | baseline description loading plus four-part TXT/JSON event loading for paired fusion |
 | `models_signsmd.py` | `Uni_Sign_SignSMD`: baseline model + description segment in the encoder input |
+| `models_signsmd_paired.py` | event phrase embedding, part/span scatter, and zero-gated pose-part injection |
 | `fine_tuning_signsmd.py` | train/eval entrypoint (mirrors `fine_tuning.py` flow) |
 | `script/train_signsmd_fusion.sh` | OpenASL pretrain -> How2Sign finetune -> eval runner |
+| `script/train_openasl_then_h2s_signsmd_paired_parts.sh` | paired OpenASL -> How2Sign -> normal/masked evaluation runner |
+| `script/generate_parts_and_train_stage1.sh` | generate both parts corpora, validate coverage, then launch paired Stage-1 with `train_stage1.sh` hyperparameters |
 
-No baseline file (`models.py`, `datasets.py`, `fine_tuning.py`) is modified.
+The early/dual baseline paths retain their original behavior. `models.py` has
+one optional part-text injection hook; its default `None` path is unchanged.
 
 ## 5. Usage
 
@@ -129,6 +133,8 @@ New CLI arguments (all others identical to the baseline):
 | `--signsmd_max_tokens` | 512 | hard cap for the description segment (tail-truncated) |
 | `--signsmd_on_missing` | `error` | `error` or `empty` on a missing text file |
 | `--frame_sampling` | `linear` | `linear`: deterministic subsampling, text spans align exactly with the pose timeline; `unisign_random`: baseline random sampling (ablation) |
+| `--eval_signsmd_text_root` | training text root | text root for a different evaluation dataset under `--eval-on-how2sign-test` |
+| `--eval_signsmd_event_root` | training event root | paired event root for that different evaluation dataset |
 
 Constraints: `--dataset How2Sign|OpenASL`, `--task SLT`, `--llm_type mt5`,
 no `--rgb_support`.
@@ -152,8 +158,9 @@ so IDs align with zero coverage gaps. Thresholds are versioned per variant
 `configs/signsmd2d_stats_thresholds.yaml` for stats) and hashed into every
 manifest.
 
-Pretrain + finetune needs BOTH corpora (add `--variant stats` for the
-numeric-timeline variant; default is coarse):
+Pretrain + finetune needs BOTH corpora. Add `--variant stats` for numeric
+timelines, or `--variant parts` for four standalone part texts plus JSON event
+spans; default is coarse:
 
 ```bash
 # OpenASL (train/dev/test share one flat pose directory)
@@ -161,6 +168,12 @@ python generate_signsmd2d.py --dataset OpenASL --splits train dev test
 
 # How2Sign (per-split pose directories)
 python generate_signsmd2d.py --dataset How2Sign --splits train test
+
+# Part-paired contract (must use the trainer's max_length)
+python generate_signsmd2d.py --dataset OpenASL --splits train dev test \
+  --variant parts --max_length 256
+python generate_signsmd2d.py --dataset How2Sign --splits train test \
+  --variant parts --max_length 256
 
 # smoke first: a few samples per variant, inspect the output text
 python generate_signsmd2d.py --dataset How2Sign --splits test --limit 10
@@ -170,18 +183,23 @@ python generate_signsmd2d.py --dataset How2Sign --splits test --limit 10 --varia
 Useful flags: `--limit N`, `--overwrite`, `--num_shards N --shard K`
 (parallel generation), `--fail_fast`, `--fps` (default 24, recorded as
 "assumed" in the manifest). Resume is the default — existing `.txt` files
-are skipped. Every generated text passes a banned-vocabulary assertion
-(no `forward`/`backward`/`contact` depth claims); interval spans are
-rendered as clip percentages so the text stays valid under the trainer's
-temporal subsampling.
+are skipped. For `parts`, a clip is skipped only when all four texts and its
+JSON exist. Every generated text passes a banned-vocabulary assertion (no
+`forward`/`backward`/`contact` depth claims); interval spans are inclusive
+trainer-aligned step indices.
 
 ## 8. Current status / prerequisites
 
-- The Uni-Sign fusion side and the SignSMD-2D compiler are implemented but
-  NOT yet run (no Python has been executed).
-- Recommended order: (1) `--limit 10` smoke generation and read a few
-  texts; (2) full OpenASL + How2Sign generation; (3) the
-  `--signsmd_on_missing empty` trainer smoke; (4)
-  `script/train_signsmd_fusion.sh` pretrain -> finetune -> eval.
+- Early, dual, and paired fusion code paths are implemented. Real one-clip
+  OpenASL/How2Sign parts generation, real paired dataloader collation,
+  part/span scatter, zero-gate identity, and gate-gradient component checks
+  have passed. A CUDA/DeepSpeed training step remains runtime-pending.
+- Recommended paired order: (1) full OpenASL + How2Sign `parts` generation;
+  (2) inspect manifest interval granularity; (3) run
+  `script/train_openasl_then_h2s_signsmd_paired_parts.sh all` in the activated
+  training environment.
+- For the original `script/train_stage1.sh` hyperparameter recipe and its
+  How2Sign-test checkpoint selection, run the combined
+  `script/generate_parts_and_train_stage1.sh all` launcher instead.
 - Thresholds are heuristic initial values; calibrate on the train split
   only if needed, then bump the contract version.

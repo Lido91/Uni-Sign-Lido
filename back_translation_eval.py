@@ -1,4 +1,4 @@
-"""Back-translation + MPJPE2D evaluation for the unified T2P path.
+"""Back-translation + MPJPE2D + SOKE/MoMADiff DTW-MPJPE2D evaluation.
 
 A frozen, trained ST-GCN Uni-Sign SLT checkpoint acts as the judge: pose
 sequences are fed to it and its BLEU against the conditioning text measures
@@ -11,6 +11,10 @@ semantic quality. Four modes build the evaluation ladder:
             ceiling (plus MPJPE2D vs GT)
   gen       text -> Uni_Sign_Unified.generate_pose -> back-translation BLEU
             (plus MPJPE2D vs GT, GT-length oracle)
+  pred_dir  externally generated poses (MoMADiff eval_t2m.py --save_predictions
+            dump: one {SENTENCE_NAME}.pkl per sample with feats_rst/feats_ref/
+            conf_ref/text in the VAE-normalized 138D space) -> back-translation
+            BLEU (plus MPJPE2D vs the dumped GT)
 
 gt/gt_conf1/vae_recon need NO trained generation model — run them first to
 validate the harness and the decoder port.
@@ -25,6 +29,7 @@ Single GPU, no DeepSpeed.
 import argparse
 import json
 import os
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -46,6 +51,8 @@ from models_unified import (
     Uni_Sign_Unified,
 )
 from SLRT_metrics import translation_performance
+from pose2d_metrics import DTWMPJPE2DMetrics
+from pose2d_predictions import save_pose_prediction_batch
 from vae_decoder import load_frozen_klvae_decoder
 from vae_encoder import DOWNSAMPLE_FACTOR, load_trainable_klvae_encoder
 
@@ -54,7 +61,7 @@ DEFAULT_VAE_META = (
     "kl_vae_h2s_openasl_pose2d/meta"
 )
 
-MODES = ("gt", "gt_conf1", "vae_recon", "gen")
+MODES = ("gt", "gt_conf1", "vae_recon", "gen", "pred_dir")
 
 
 def get_backtrans_args_parser():
@@ -70,6 +77,15 @@ def get_backtrans_args_parser():
                         help="Uni_Sign_Unified checkpoint (gen mode).")
     parser.add_argument("--vae_checkpoint", default="",
                         help="Required for vae_recon and gen modes.")
+    parser.add_argument("--pred_dir", default="",
+                        help="Directory of external test predictions (mode "
+                             "pred_dir): one {SENTENCE_NAME}.pkl per sample "
+                             "as dumped by MoMADiff eval_t2m.py with "
+                             "save_predictions. Comma-separate several dirs "
+                             "to merge per-rank DDP dumps. The feats are "
+                             "denormalized with --vae_mean_path/--vae_std_path"
+                             ", which must match the meta stats the dump was "
+                             "produced with.")
     parser.add_argument("--vae_mean_path", default=f"{DEFAULT_VAE_META}/mean.npy")
     parser.add_argument("--vae_std_path", default=f"{DEFAULT_VAE_META}/std.npy")
     parser.add_argument("--frame_sampling", default="vae_linear",
@@ -93,6 +109,11 @@ def get_backtrans_args_parser():
     parser.add_argument("--cond_drop_prob", type=float, default=0.1)
     parser.add_argument("--trans_infer_timesteps", type=int, default=9)
     parser.add_argument("--guidance_param", type=float, default=3.0)
+    parser.add_argument("--save_predictions", "--save-predictions",
+                        action="store_true",
+                        help="Save unclipped generated/reconstructed pose, GT, "
+                             "confidence, caption and back-translation as "
+                             "pred_dir-compatible per-sample .pkl files.")
     return parser
 
 
@@ -105,9 +126,10 @@ def parts_to_motion(parts, mean, std):
     return (motion - mean.to(motion.dtype)) / std.to(motion.dtype)
 
 
-def motion_to_parts(motion, conf_value=1.0):
+def motion_to_parts(motion, conf_value=1.0, clip_coordinates=True):
     joints = motion.reshape(*motion.shape[:-1], POSE2D_FEATURE_DIM // 2, 2)
-    joints = joints.clamp(-1.0, 1.0)
+    if clip_coordinates:
+        joints = joints.clamp(-1.0, 1.0)
     conf = torch.full_like(joints[..., :1], conf_value)
     packed = torch.cat([joints, conf], dim=-1)
     parts, start = {}, 0
@@ -116,6 +138,55 @@ def motion_to_parts(motion, conf_value=1.0):
         parts[part] = packed[..., start:start + count, :]
         start += count
     return parts
+
+
+def clamp_judge_parts(parts):
+    """Clip only the SLT input; motion metrics use native decoded coordinates."""
+    result = {}
+    for part, value in parts.items():
+        packed = value.clone()
+        packed[..., :2] = packed[..., :2].clamp(-1.0, 1.0)
+        result[part] = packed
+    return result
+
+
+def conf_to_parts(conf):
+    """Split a [B, T, 69] per-joint confidence tensor by part."""
+    parts, start = {}, 0
+    for part in POSE2D_PART_ORDER:
+        count = POSE2D_PART_JOINTS[part]
+        parts[part] = conf[..., start:start + count]
+        start += count
+    return parts
+
+
+def pad_stack(seqs, zero_pad=False):
+    """Stack variable-length [T, ...] tensors, repeat-last (or zero) padded."""
+    max_len = max(seq.shape[0] for seq in seqs)
+    padded = []
+    for seq in seqs:
+        if seq.shape[0] < max_len:
+            fill = torch.zeros_like(seq[-1:]) if zero_pad else seq[-1:]
+            fill = fill.expand(max_len - seq.shape[0], *seq.shape[1:])
+            seq = torch.cat([seq, fill], dim=0)
+        padded.append(seq)
+    return torch.stack(padded, dim=0)
+
+
+def list_prediction_files(pred_dir):
+    files = []
+    for directory in pred_dir.split(","):
+        directory = directory.strip()
+        if not directory:
+            continue
+        entries = sorted(os.listdir(directory))
+        files.extend(
+            os.path.join(directory, entry)
+            for entry in entries if entry.endswith(".pkl")
+        )
+    if not files:
+        raise ValueError(f"no .pkl predictions found under {pred_dir}")
+    return files
 
 
 def resample_batch_parts(parts, lengths, max_frames):
@@ -224,7 +295,7 @@ def vae_reconstruct(parts, lengths, encoder, decoder, mean, std, device):
         decoded = decoder(z)
         recon[indices, : decoded.shape[1]] = decoded.to(recon.dtype)
     recon = recon * std.to(recon.dtype) + mean.to(recon.dtype)
-    return motion_to_parts(recon), trunc
+    return motion_to_parts(recon, clip_coordinates=False), trunc
 
 
 def main(args):
@@ -236,23 +307,36 @@ def main(args):
         raise ValueError(f"--vae_checkpoint is required for mode {args.mode}")
     if args.mode == "gen" and not args.unified_checkpoint:
         raise ValueError("--unified_checkpoint is required for mode gen")
+    if args.mode == "pred_dir" and not args.pred_dir:
+        raise ValueError("--pred_dir is required for mode pred_dir")
     if args.dataset == "How2Sign" and args.split == "dev":
         raise ValueError("How2Sign has no dev split")
+    save_predictions = getattr(args, "save_predictions", False)
+    if save_predictions and (not args.output_dir
+                             or args.mode not in ("gen", "vae_recon")):
+        raise ValueError("--save_predictions needs --output_dir and mode gen/vae_recon")
 
-    label_path = (dev_label_paths if args.split == "dev"
-                  else test_label_paths)[args.dataset]
-    dataset = S2T_Dataset_Pose2D_KLVAE(
-        path=label_path, args=args, phase=args.split
-    )
-    print(dataset)
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        collate_fn=dataset.collate_fn,
-        sampler=torch.utils.data.SequentialSampler(dataset),
-        pin_memory=args.pin_mem,
-    )
+    if args.mode == "pred_dir":
+        # The dump is self-contained (pred + GT + conf + caption); no label
+        # file or dataset loader is needed.
+        prediction_files = list_prediction_files(args.pred_dir)
+        print(f"pred_dir: {len(prediction_files)} prediction files")
+        loader = None
+    else:
+        label_path = (dev_label_paths if args.split == "dev"
+                      else test_label_paths)[args.dataset]
+        dataset = S2T_Dataset_Pose2D_KLVAE(
+            path=label_path, args=args, phase=args.split
+        )
+        print(dataset)
+        loader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            collate_fn=dataset.collate_fn,
+            sampler=torch.utils.data.SequentialSampler(dataset),
+            pin_memory=args.pin_mem,
+        )
 
     # ---- frozen SLT judge --------------------------------------------------
     print("Loading SLT judge:")
@@ -273,13 +357,14 @@ def main(args):
 
     # ---- mode-specific machinery ------------------------------------------
     mean = std = vae_encoder = vae_decoder = unified = None
-    if args.mode in ("vae_recon",):
+    if args.mode in ("vae_recon", "pred_dir"):
         mean = torch.from_numpy(
             np.load(args.vae_mean_path).astype(np.float32)
         ).to(device)
         std = torch.from_numpy(
             np.load(args.vae_std_path).astype(np.float32)
         ).clamp(min=1e-10).to(device)
+    if args.mode == "vae_recon":
         vae_encoder = load_trainable_klvae_encoder(
             args.vae_checkpoint, input_emb_width=POSE2D_FEATURE_DIM
         ).to(device).eval()
@@ -329,66 +414,183 @@ def main(args):
     # ---- evaluation loop ---------------------------------------------------
     metric_logger = utils.MetricLogger(delimiter="  ")
     mpjpe = MPJPEAccumulator()
+    dtw = DTWMPJPE2DMetrics()
     predictions, references, names = [], [], []
+    prediction_dir = (Path(args.output_dir)
+                      / f"{args.mode}_{args.dataset}_{args.split}_predictions")
+    saved_prediction_count = 0
+    saved_names = set()
 
-    with torch.no_grad():
-        for src_input, tgt_input in metric_logger.log_every(
-            loader, 10, f"{args.mode}:"
-        ):
-            gt_parts = {p: src_input[p].float() for p in POSE2D_PART_ORDER}
-            lengths = [int(x) for x in src_input["src_length_batch"]]
-            batch_names = src_input["name_batch"]
-            sentences = tgt_input["gt_sentence"]
+    if args.mode == "pred_dir":
+        batches = [
+            prediction_files[i:i + args.batch_size]
+            for i in range(0, len(prediction_files), args.batch_size)
+        ]
+        with torch.no_grad():
+            for paths in metric_logger.log_every(batches, 10, "pred_dir:"):
+                payloads = []
+                for path in paths:
+                    with open(path, "rb") as handle:
+                        payloads.append(pickle.load(handle))
+                batch_names = [str(payload.get("name", Path(path).stem))
+                               for path, payload in zip(paths, payloads)]
+                sentences = [str(payload["text"]) for payload in payloads]
+                rst = [
+                    torch.from_numpy(
+                        np.asarray(payload["feats_rst"], dtype=np.float32)
+                    )
+                    for payload in payloads
+                ]
+                ref = [
+                    torch.from_numpy(
+                        np.asarray(payload["feats_ref"], dtype=np.float32)
+                    )
+                    for payload in payloads
+                ]
+                conf = [
+                    torch.from_numpy(
+                        np.asarray(payload["conf_ref"], dtype=np.float32)
+                    )
+                    for payload in payloads
+                ]
+                lengths_rst = [int(seq.shape[0]) for seq in rst]
+                lengths_ref = [int(seq.shape[0]) for seq in ref]
 
-            if args.mode == "gt":
-                parts, part_lengths = gt_parts, lengths
-            elif args.mode == "gt_conf1":
-                parts = {}
+                motion_rst = pad_stack(rst).to(device) * std + mean
+                motion_ref = pad_stack(ref).to(device) * std + mean
+                # Generated poses carry no confidence -> conf=1 (the gt_conf1
+                # ceiling measures the cost of exactly this mismatch).
+                parts = motion_to_parts(motion_rst, clip_coordinates=False)
+                gt_parts = motion_to_parts(motion_ref, clip_coordinates=False)
+                conf_parts = conf_to_parts(
+                    pad_stack(conf, zero_pad=True).to(device)
+                )
                 for part in POSE2D_PART_ORDER:
-                    tensor = gt_parts[part].clone()
-                    tensor[..., 2] = 1.0
-                    parts[part] = tensor
-                part_lengths = lengths
-            elif args.mode == "vae_recon":
-                parts, part_lengths = vae_reconstruct(
-                    gt_parts, lengths, vae_encoder, vae_decoder,
-                    mean, std, device,
-                )
-                mpjpe.update(
-                    {p: parts[p].cpu() for p in POSE2D_PART_ORDER},
-                    gt_parts, part_lengths,
-                )
-            else:  # gen
-                frame_lens = torch.tensor(lengths)
-                gen_parts, gen_lens = unified.generate_pose(
-                    sentences,
-                    frame_lens,
-                    timesteps=args.trans_infer_timesteps,
-                    cond_scale=args.guidance_param,
-                )
-                parts = gen_parts
-                part_lengths = [int(x) for x in gen_lens]
-                mpjpe.update(
-                    {p: parts[p].cpu() for p in POSE2D_PART_ORDER},
-                    gt_parts, part_lengths,
-                )
+                    gt_parts[part][..., 2] = conf_parts[part]
 
-            parts, part_lengths = resample_batch_parts(
-                parts, part_lengths, args.backtrans_max_frames
-            )
-            judge_input = build_judge_input(
-                parts, part_lengths, batch_names, device
-            )
-            stack_out = judge(judge_input, tgt_input)
-            metric_logger.update(loss=stack_out["loss"].item())
-            output = judge.generate(
-                stack_out,
-                max_new_tokens=args.max_new_tokens,
-                num_beams=args.num_beams,
-            )
-            predictions.extend(output)
-            references.extend(sentences)
-            names.extend(batch_names)
+                mpjpe.update(
+                    {p: parts[p].cpu() for p in POSE2D_PART_ORDER},
+                    {p: gt_parts[p].cpu() for p in POSE2D_PART_ORDER},
+                    [min(a, b) for a, b in zip(lengths_rst, lengths_ref)],
+                )
+                dtw.update_parts(parts, gt_parts, lengths_ref, lengths_rst,
+                                 args.dataset, batch_names)
+
+                parts, part_lengths = resample_batch_parts(
+                    clamp_judge_parts(parts), lengths_rst, args.backtrans_max_frames
+                )
+                judge_input = build_judge_input(
+                    parts, part_lengths, batch_names, device
+                )
+                tgt_input = {
+                    "gt_sentence": sentences,
+                    "gt_gloss": [""] * len(sentences),
+                }
+                stack_out = judge(judge_input, tgt_input)
+                metric_logger.update(loss=stack_out["loss"].item())
+                output = judge.generate(
+                    stack_out,
+                    max_new_tokens=args.max_new_tokens,
+                    num_beams=args.num_beams,
+                )
+                predictions.extend(output)
+                references.extend(sentences)
+                names.extend(batch_names)
+    else:
+        with torch.no_grad():
+            for src_input, tgt_input in metric_logger.log_every(
+                loader, 10, f"{args.mode}:"
+            ):
+                gt_parts = {p: src_input[p].float() for p in POSE2D_PART_ORDER}
+                lengths = [int(x) for x in src_input["src_length_batch"]]
+                batch_names = src_input["name_batch"]
+                sentences = tgt_input["gt_sentence"]
+
+                if args.mode == "gt":
+                    parts, part_lengths = gt_parts, lengths
+                elif args.mode == "gt_conf1":
+                    parts = {}
+                    for part in POSE2D_PART_ORDER:
+                        tensor = gt_parts[part].clone()
+                        tensor[..., 2] = 1.0
+                        parts[part] = tensor
+                    part_lengths = lengths
+                elif args.mode == "vae_recon":
+                    parts, part_lengths = vae_reconstruct(
+                        gt_parts, lengths, vae_encoder, vae_decoder,
+                        mean, std, device,
+                    )
+                    mpjpe.update(
+                        {p: parts[p].cpu() for p in POSE2D_PART_ORDER},
+                        gt_parts, part_lengths,
+                    )
+                    dtw.update_parts(parts, gt_parts, lengths, part_lengths,
+                                     args.dataset, batch_names)
+                else:  # gen
+                    frame_lens = torch.tensor(lengths)
+                    gen_parts, gen_lens = unified.generate_pose(
+                        sentences,
+                        frame_lens,
+                        timesteps=args.trans_infer_timesteps,
+                        cond_scale=args.guidance_param,
+                        clip_coordinates=False,
+                    )
+                    parts = gen_parts
+                    part_lengths = [int(x) for x in gen_lens]
+                    mpjpe.update(
+                        {p: parts[p].cpu() for p in POSE2D_PART_ORDER},
+                        gt_parts, part_lengths,
+                    )
+                    dtw.update_parts(parts, gt_parts, lengths, part_lengths,
+                                     args.dataset, batch_names)
+
+                native_parts, native_lengths = parts, list(part_lengths)
+                parts, part_lengths = resample_batch_parts(
+                    clamp_judge_parts(parts), part_lengths, args.backtrans_max_frames
+                )
+                judge_input = build_judge_input(
+                    parts, part_lengths, batch_names, device
+                )
+                stack_out = judge(judge_input, tgt_input)
+                metric_logger.update(loss=stack_out["loss"].item())
+                output = judge.generate(
+                    stack_out,
+                    max_new_tokens=args.max_new_tokens,
+                    num_beams=args.num_beams,
+                )
+                if save_predictions:
+                    if any(str(name) in saved_names for name in batch_names):
+                        raise ValueError("duplicate sample ID while saving predictions")
+                    motion_mean = unified.motion_mean if unified is not None else mean
+                    motion_std = unified.motion_std if unified is not None else std
+                    saved_paths = save_pose_prediction_batch(
+                        prediction_dir, native_parts, gt_parts,
+                        native_lengths, lengths, batch_names, sentences,
+                        motion_mean, motion_std, POSE2D_PART_ORDER,
+                        POSE2D_PART_JOINTS,
+                        back_translations=judge.text_tokenizer.batch_decode(
+                            output, skip_special_tokens=True
+                        ),
+                        metadata={
+                            "mode": args.mode, "dataset": args.dataset,
+                            "split": args.split, "seed": args.seed,
+                            "frame_sampling": args.frame_sampling,
+                            "max_length": args.max_length,
+                            "slt_checkpoint": args.slt_checkpoint,
+                            "unified_checkpoint": args.unified_checkpoint,
+                            "vae_checkpoint": args.vae_checkpoint,
+                            "latent_mean_path": args.latent_mean_path,
+                            "latent_std_path": args.latent_std_path,
+                            "ddim_steps": args.ddim_steps,
+                            "mar_states": args.trans_infer_timesteps,
+                            "guidance_param": args.guidance_param,
+                        },
+                    )
+                    saved_prediction_count += len(saved_paths)
+                    saved_names.update(str(name) for name in batch_names)
+                predictions.extend(output)
+                references.extend(sentences)
+                names.extend(batch_names)
 
     tokenizer = judge.text_tokenizer
     prediction_ids = pad_sequence(
@@ -401,12 +603,36 @@ def main(args):
         "mode": args.mode,
         "dataset": args.dataset,
         "split": args.split,
+        "num_samples": len(names),
+        "seed": args.seed,
+        "slt_checkpoint": args.slt_checkpoint,
         **bleu,
         "rouge": rouge,
         "judge_loss": metric_logger.meters["loss"].global_avg,
     }
-    if args.mode in ("vae_recon", "gen"):
+    if args.mode == "pred_dir":
+        results["pred_dir"] = args.pred_dir
+    if args.mode == "gen":
+        results["unified_checkpoint"] = args.unified_checkpoint
+        results["gt_length_conditioned"] = True
+        results["generation_settings"] = {
+            "ddim_steps": args.ddim_steps,
+            "mar_states": args.trans_infer_timesteps,
+            "guidance_param": args.guidance_param,
+            "frame_sampling": args.frame_sampling,
+            "max_length": args.max_length,
+            "backtrans_max_frames": args.backtrans_max_frames,
+        }
+    if save_predictions:
+        if saved_prediction_count != len(names):
+            raise RuntimeError("saved pose count does not match evaluated sample count")
+        results["prediction_dir"] = str(prediction_dir)
+        results["saved_prediction_count"] = saved_prediction_count
+    if args.mode in ("vae_recon", "gen", "pred_dir"):
         results.update(mpjpe.results())
+        results.update(dtw.results())
+        results['dtw_protocol'] = 'MoMADiff/SOKE: accumulated sequence cost, independent part alignment, sequence mean, hand=(lhand+rhand)/2'
+        results['dtw_valid_sequence_counts'] = dict(dtw.counts)
     print(json.dumps(results, indent=2))
 
     if args.output_dir:
@@ -415,6 +641,9 @@ def main(args):
         tag = f"{args.mode}_{args.dataset}_{args.split}"
         with (output_dir / f"{tag}_results.json").open("w") as f:
             json.dump(results, f, indent=2)
+        if dtw.name2scores:
+            with (output_dir / f"{tag}_dtw_per_sample.json").open("w") as f:
+                json.dump(dtw.name2scores, f, indent=2)
         with (output_dir / f"{tag}_pres.txt").open("w") as f:
             for name, prediction in zip(names, decoded):
                 f.write(f"sample: {name}, prediction: {prediction}\n")
