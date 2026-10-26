@@ -1,6 +1,6 @@
 # SignRAG Reproduction — Progress Log
 
-Last updated: 2026-10-25 22:40 UTC
+Last updated: 2026-10-26 04:20 UTC
 
 This file holds status, results and a step-by-step log for review. Method details, the run matrix and
 reasoning are in `doc/signrag_style_retriever_plan.md`. All outputs are under
@@ -12,8 +12,8 @@ reasoning are in `doc/signrag_style_retriever_plan.md`. All outputs are under
 |---|---|---|---|---|
 | **D. CSL-Daily** (top priority, requested by supervisor) | Reproduce SignRAG RA-SFT on CSL-Daily (paper: SFT 29.72 → RA-SFT 31.22 BLEU-4) | All CSL runs done (10-25 01:54) | Real retrieval: no gain (`real_d` 25.00 vs `empty` 25.18 test B4). **Sentence TF-IDF ORACLE `oracle_d` 27.63 (+2.45)**. GT-gloss ORACLE 31.04 | See Results / E; next is closing the retrieval gap |
 | B. RA-SFT on H2S | Does sentence retrieval help mT5 SLT? | E1 done. E2 real stopped at 14/20 epochs (NaN loss). E2 empty crashed at epoch 2 (inf loss); the user decided not to rerun it | E1: real 15.04 / empty 15.13 (no retrieval gain). E2 real best 14.33 (epoch 11) | Paused |
-| **E. Hint training (sentence TF-IDF oracle, word-level retrieval), H2S + CSL** | Train the translator with hints from TF-IDF on the GT (ORACLE), word-level versions, and real word retrieval | CSL done. H2S: `oracle_d` done; `oracle_words` rerun queued; `words` / `gtwords` wait for the full WLASL spotting (rerun since 10-25 19:09) | **H2S_oracle_d 17.04 vs H2S_empty 15.13 (+1.9)**; CSL_oracle_d +2.45; CSL predgloss (CTC, non-oracle) ≈ 0; CSL oracle words ≈ 0 | Wait for the H2S word runs |
-| **F. Strong utility-aligned retriever** (agreed 10-25) | Retrieve sentences/words close to the *answer* (graded relevance, oracle distillation) with a high-capacity sign tower; later text→pose for SLG | Design in plan doc §11.1. Translator-rerank check done (CSL + H2S). Stage 1 running (Results / G). Stage 2 run plan in plan doc §11.3, not started | Baselines to beat (retrieval BLEU, test): S3dn 5.30 / 1.86, translate-then-TF-IDF 10.71 / 3.20, ORACLE 18.02 / 7.8 (CSL / H2S) | Contribution framing agreed (plan §11.2: C1 diagnosis, C2 draft-space retrieval, C3 matched hint quality, C4 learned reranker). **Stage 1 (translate, retrieve, refine) started 10-25 21:00 on idle GPUs (user): `CSL_twopass_syn` running; `selffit` / `xfit` queued in `script/twopass_csl.sh`**. Stage 2 (graded-relevance retriever) after that |
+| **E. Hint training (sentence TF-IDF oracle, word-level retrieval), H2S + CSL** | Train the translator with hints from TF-IDF on the GT (ORACLE), word-level versions, and real word retrieval | All done (H2S word runs 10-26 ~02:00) | **H2S_oracle_d 17.04 vs H2S_empty 15.13 (+1.9)**; CSL_oracle_d +2.45. Word hints: H2S_words 15.01 and H2S_oracle_words 15.10 (≈ 0); H2S_gtwords 16.15 (ORACLE, +1.0); CSL predgloss / oracle words ≈ 0 | Sentence hints, not word hints, carry the gain; closing the retrieval gap is line F |
+| **F. Strong utility-aligned retriever** (agreed 10-25) | Retrieve sentences/words close to the *answer* (graded relevance, oracle distillation) with a high-capacity sign tower; later text→pose for SLG | Design in plan doc §11.1. Translator-rerank check done (CSL + H2S). Stage 1 running (Results / G). Stage 2 run plan in plan doc §11.3, not started | Baselines to beat (retrieval BLEU, test): S3dn 5.30 / 1.86, translate-then-TF-IDF 10.71 / 3.20, ORACLE 18.02 / 7.8 (CSL / H2S) | Contribution framing agreed (plan §11.2: C1 diagnosis, C2 draft-space retrieval, C3 matched hint quality, C4 learned reranker). **Stage 1: `CSL_twopass_syn` done (test 25.50 at best dev, dev 24.79 below `empty` 25.57: mixed); `selffit` running; folds running; fold2 rerun after a NaN abort, then `xfit` (~10-26 14:30)**. Stage 2 (graded-relevance retriever) awaits the go-ahead |
 | C. Word-level dictionary | Mine word → segment pairs from H2S/OpenASL with WLASL; use the words as hints | Prototype done | Spotting top-1 33.6% vs control 1.5%; word-order Spearman 0.86 | Oracle-hint ceiling; full-scale mining |
 | A. Sentence retriever | Strong sign ↔ text retriever | Done (S3dn) | H2S R@1 V2T 35.4 / T2V 38.8; OpenASL 51.7 / 51.1 | CiCo-style upgrades (parked) |
 
@@ -21,17 +21,17 @@ reasoning are in `doc/signrag_style_retriever_plan.md`. All outputs are under
 
 | GPU | Job | Started (UTC) | ETA (UTC) | Output |
 |---|---|---|---|---|
-| 0 | `H2S_words` (WLASL-spotted words, non-oracle, `--skip_nonfinite_loss`) | 10-25 19:56 | ~10-26 01:30 | `$OUT/ra_sft/H2S_words/log.txt` |
-| 1 | `H2S_gtwords` (GT words with a WLASL gloss, ORACLE, `--skip_nonfinite_loss`) | 10-25 19:58 | ~10-26 01:30 | `$OUT/ra_sft/H2S_gtwords/log.txt` |
-| 2 | `CSL_twopass_syn` (stage 1: draft-retrieved hints, synthetic train drafts noise 0.5); 4/20 epochs at 22:31, ~22 min/epoch | 10-25 21:00 | ~10-26 04:30 | `$OUT/ra_sft/CSL_twopass_syn/{log.txt,train.out}` |
-| 3 | `H2S_oracle_words` (rerun with `--skip_nonfinite_loss`); the test spotting and the `CSL_real_d` diagnostics finished at 19:23 / 19:19 | 10-25 19:24 | ~10-26 01:00 | `$OUT/ra_sft/H2S_oracle_words/log.txt` |
-| queue | `script/word_hint_queue.sh` (pid 1815238): all 6 jobs launched or done; it exits when the three H2S runs end | 10-25 19:11 | — | `$OUT/word_retrieval/queue.out` |
-| queue | `script/twopass_csl.sh` (pid 1924836, relaunched 22:32 after a bug fix): `selffit_preds` done → `fold0..3` translators (each needs an idle GPU: fold0–2 after the H2S runs ~02:00, fold3 after `twopass_syn` ~04:30; ~4 h each plus held-out translation) → `CSL_twopass_selffit` (~06:00–11:00) → `CSL_twopass_xfit` (after all folds, ~08:30–13:30) | 10-25 22:32 | xfit ~10-26 13:30 | `$OUT/rag_inputs/twopass_csl/queue.out` |
+| 3 | `fold0` translator (3/4 of train, CSL recipe), 14/20 epochs at 03:40, ~12.5 min/epoch; then translates its held-out quarter | 10-26 00:45 | ~05:10 | `$OUT/rag_inputs/twopass_csl/fold0{,_heldout}/` |
+| 0 | `fold1` translator, 12/20 at 03:36 | 10-26 01:07 | ~05:20 | `…/fold1{,_heldout}/` |
+| 1 | `fold3` translator, 8/20 at 03:40 | 10-26 01:59 | ~06:30 | `…/fold3{,_heldout}/` |
+| 2 | `CSL_twopass_selffit` (train hints from self-fit drafts, retrieval BLEU 19.01 vs test 10.66), 3/20 at 03:40 | 10-26 02:41 | ~07:30 | `$OUT/ra_sft/CSL_twopass_selffit/` |
+| chain | `bash script/twopass_csl.sh jobs fold2 CSL_twopass_xfit` (pid 2099136): `fold2` rerun with `--skip_nonfinite_loss` on the first idle GPU (~05:10 → ~09:45), then `CSL_twopass_xfit` once all 4 held-out translations exist (~09:45 → ~14:30) | 10-26 03:50 | xfit ~14:30 | `$OUT/rag_inputs/twopass_csl/queue_jobs.out` |
+| — | The first queue's main loop (pid 1924836) was stopped at 03:50 so it cannot race the chain for `xfit`; its four running jobs continue (ppid 1) and log to `queue.out` | | | |
 ## Planned, Not Started
 
 | Item | Dataset | Status | Details |
 |---|---|---|---|
-| Stage 2: graded-relevance retriever G1 (warm start from S2dn) / G2 (from scratch) / G3 (+ encoder) | CSL first | Awaiting go-ahead; code not written. G1/G2 fit in GPU 2's spare memory; G3 needs an idle GPU (one expected from ~10-26 06:00) | plan doc §11.3 |
+| Stage 2: graded-relevance retriever G1 (warm start from S2dn) / G2 (from scratch) / G3 (+ encoder) | CSL first | Awaiting go-ahead; G1/G2 code written and smoke-tested (`graded_retriever.py`), G3 not yet implemented. G1/G2 fit in GPU 2's spare memory; G3 needs an idle GPU (one expected from ~10-26 06:00) | plan doc §11.3 |
 | RA-SFT with the stage-2 retriever (cross-fitted train hints) | CSL, then H2S | After stage 2 | plan doc §11.3 |
 | Stage 1 on H2S (`H2S_twopass_*`) | H2S | After the CSL stage-1 results | plan doc §11.2 |
 | Dose–response (mix oracle and real hints; hint quality → BLEU gain) | CSL | Not started | plan doc §11 item 6 |
@@ -226,9 +226,9 @@ hint is built from the sample's ground truth.
 | `H2S_empty` | none | baseline | 15.13 | 14.7–15.1 |
 | `H2S_real` / `H2S_random` | S3dn top-3 / random | real / control | 15.04 / 15.02 | — |
 | **`H2S_oracle_d`** | TF-IDF top-3 distinct sentences | **ORACLE** | **17.04** | 16.8–17.0 from epoch 3 on |
-| `H2S_oracle_words` | 8 words from the TF-IDF top-3 | ORACLE | rerun queued | — |
-| `H2S_words` | WLASL-spotted words (precision ≈ 17%) | real word retrieval | waits for spotting | — |
-| `H2S_gtwords` | GT words with a WLASL gloss | ORACLE | waits for spotting | — |
+| `H2S_oracle_words` | 8 words from the TF-IDF top-3 | ORACLE | 15.10 (ep 9) | 14.7–15.1 |
+| `H2S_words` | WLASL-spotted words (precision ≈ 17%) | real word retrieval | 15.01 (ep 9) | 14.7–15.0 |
+| `H2S_gtwords` | GT words with a WLASL gloss | ORACLE | **16.15** (ep 9) | 15.1 → 16.2, still rising |
 
 - **Translator-as-retriever (10-25 19:30, CPU, no GT).** The baseline
   model's own test translation is used as the TF-IDF query over the train
@@ -462,13 +462,21 @@ translation. `rerank_retrieval.py`, output `$OUT/rerank/{csl,h2s}/`.
   - The pool holds the oracle top-1 for only 34.8% of clips (CSL: 73.0%),
     so on H2S recall is also harder.
 
-- **Why S3dn ranks poorly (checked 10-25 21:00).** Only 0.2% of CSL dev
-  and test sentences (dev 1077, test 1176 clips) occur in train. S2dn was
-  trained and selected on exact pairs: its internal dev split, 5% of the
-  train clips, has the same sentences signed by other signers, so dev
-  R@1 reaches 61%. That skill does not transfer when the sentence is new.
-  Stage 2 therefore needs graded targets and a dev split grouped by
-  sentence.
+- **Why S3dn ranks poorly (checked 10-25 21:00, corrected 10-26 04:20).**
+  - Only 0.2% of CSL dev and test sentences (dev 1077, test 1176 clips)
+    occur in train.
+  - S2dn was trained on exact pairs and selected by *within-dev*
+    retrieval. For CSL, that is the real dev split, with the dev sentences
+    themselves as the gallery. Each query's own sentence is therefore a
+    candidate, which gives dev R@1 61%.
+  - RAG retrieves from the train sentences, where the own sentence is
+    almost never present. The old selection metric measured a different
+    task.
+  - (Correction: on 10-25 this was attributed to a random 5% pseudo-dev
+    taken from train. That split is used only without a dev split, i.e.
+    for How2Sign.)
+  - Stage 2 uses graded targets and selects on dev → train-gallery
+    retrieval BLEU.
 
 ### G. Stage 1: Translate, Retrieve, Refine (CSL, from 10-25 21:00)
 
@@ -508,9 +516,28 @@ drafts must have test-like quality (C3). Output:
   hints come from 25.6-BLEU drafts. This is the mismatch C3 tests. The same
   call re-scored dev at 25.18 with `fine_tuning_rag.py --rag_mode empty`
   (`fine_tuning.py` gave 25.14), so the two code paths agree.
-- **`CSL_twopass_syn`, partial** (dev B4 by epoch): 22.38, 23.56, 22.33,
-  22.38. `CSL_empty` at the same epochs: 21.18, 21.01, 22.09, 21.32. That
-  run peaked only at epoch 19, so the early lead means little yet.
+- **`CSL_twopass_syn` result (finished 10-26 ~02:40).** It is selected at
+  the best dev epoch, 18.
+
+  | Run | dev B4 (best) | test B4 at that epoch | test, last 10 epochs |
+  |---|---|---|---|
+  | `CSL_empty` | 25.57 | 25.18 | 24.7–25.4 |
+  | `CSL_real_d` (S3dn hints) | 24.79 | 25.00 | 23.7–25.2 |
+  | **`CSL_twopass_syn`** | 24.79 | **25.50** | 24.6–25.7 |
+  | `CSL_oracle_d` (ORACLE) | 27.57 | 27.63 | 26.6–27.6 |
+
+  - The outcome is mixed. Test is +0.32 over `empty` and higher in most of
+    the last epochs, but dev is lower (-0.78).
+  - Both differences are within the epoch-to-epoch spread, so there is no
+    clear gain. Hints with retrieval BLEU about 10.7 are far below the
+    oracle's 18.
+- **Self-fit train hints.** Retrieval BLEU 19.01 / F1@3 41.61
+  (`metrics_train_selffit.json`), i.e. oracle-like, vs 10.66 at test. This
+  is the C3 mismatch that `CSL_twopass_selffit` tests.
+- **fold2 aborted (10-26 01:59).** NaN loss at epoch 3, step 1491, with
+  finite inputs. The batch is saved in
+  `fold2_failed_nan_ep3/nonfinite_batch_rank0.pt`, and the directory was
+  kept under that name. fold2 is rerun with `--skip_nonfinite_loss`.
 
 ### C. Word-Level Dictionary
 
@@ -562,6 +589,39 @@ the files touched, the output location and the outcome. "Scratchpad" means
 That folder is temporary, so any script there worth keeping should be
 moved into the repo.
 
+### 2026-10-26
+
+- **04:00–04:20: stage-2 code written (not run).**
+  - New `graded_retriever.py`; design in plan doc §11.3.
+  - Smoke test: 3 steps on GPU 2 (shared with `twopass_selffit`), output
+    in the scratchpad only. Epoch 0 (= S2dn) reproduces S3dn's test
+    retrieval BLEU 5.30, so the evaluation matches.
+  - Corrected the 10-25 claim about S2dn's dev split. CSL used the real
+    dev split with within-dev retrieval, not a 5% pseudo-dev (Results /
+    F).
+  - G1/G2 await the go-ahead.
+- **03:40–03:55: overnight results recorded; fold2 rerun chained.**
+  - H2S word runs finished (~02:00): `H2S_words` 15.01, `H2S_oracle_words`
+    15.10, `H2S_gtwords` 16.15 (`H2S_empty` 15.13; Results / E).
+  - `CSL_twopass_syn` finished: test 25.50 at the best dev epoch, but dev
+    is 24.79 vs 25.57. Mixed (Results / G).
+  - The queue started fold0 (GPU 3, 00:45), fold1 (GPU 0, 01:07), fold2
+    (GPU 1, 01:10), fold3 (GPU 1, 01:59, after fold2 failed) and
+    `CSL_twopass_selffit` (GPU 2, 02:41).
+  - fold2 aborted on a NaN loss at epoch 3. Its directory was renamed to
+    `fold2_failed_nan_ep3`.
+  - `script/twopass_csl.sh`:
+    - training now passes `--skip_nonfinite_loss`;
+    - new `jobs NAME...` mode runs named jobs in order, each once its
+      inputs exist and a GPU is free.
+  - Stopped the first queue's main loop (pid 1924836) so it cannot also
+    start `xfit`. Its four running jobs continue.
+  - Started `jobs fold2 CSL_twopass_xfit` (pid 2099136,
+    `queue_jobs.out`).
+  - Git: fixed `.gitignore` (`__pycache__/` anywhere, `*.pyc`,
+    `dataset/`). The 43 committed `.pyc` files were removed from the
+    index (staged, not committed; local files kept).
+
 ### 2026-10-25
 
 - **22:50: planning written down.** Added the stage-2 run plan (CSL
@@ -597,8 +657,9 @@ moved into the repo.
     `CSL_twopass_selffit` → `CSL_twopass_xfit`. A training job needs
     ≥ 40 GB free, i.e. an idle GPU, so the H2S runs are not touched.
     `selffit_preds` (≥ 16 GB) started next to `twopass_syn` on GPU 2.
-  - Found that S2dn's dev R@1 of 61% comes from repeated sentences:
-    CSL dev/test share only 0.2% of sentences with train (Results / F).
+  - Found that CSL dev/test share only 0.2% of sentences with train, so
+    S2dn's dev R@1 of 61% does not reflect RAG retrieval (Results / F;
+    the cause was corrected on 10-26).
   - No seed repeats and no reruns of existing experiments.
 - **20:55: H2S rerank result recorded** (Results / F).
   - Pool best ORACLE 7.03 vs 7.8; rerank 3.78 vs TF-IDF on the translation

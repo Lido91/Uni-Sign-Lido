@@ -1308,10 +1308,11 @@ is harder (pool recall 34.8% vs 73.0%, ORACLE 7.8).
   over the whole gallery come from cached text embeddings, and
   pᵢ = softmax(f(poseᵢ)·g(s) / τ).
 - Loss: KL(qᵢ ‖ pᵢ) + λ·InfoNCE(exact pair), λ ≈ 0.1–0.5.
-- Dev: held-out train clips **grouped by sentence ID**, so their
-  sentences are absent from the gallery, as at test time. The current
-  random 5% split keeps other signers' copies in the gallery, so its R@1
-  of 61% is inflated.
+- Dev (CSL): the real dev split queries the **train-sentence gallery**,
+  as RAG does at test time (0.2% sentence overlap). S2dn instead selected
+  on within-dev retrieval, where every query's own sentence is in the
+  gallery (R@1 61%). How2Sign has no dev split and will need a pseudo-dev
+  grouped by sentence.
 - Selection: dev retrieval BLEU (top-1) / F1@3, not exact R@5.
 
 **Runs (CSL).**
@@ -1326,10 +1327,22 @@ is harder (pool recall 34.8% vs 73.0%, ORACLE 7.8).
 Later: text tower ablation (frozen mT5 vs trainable top layers vs bge-m3),
 and BLEU or embedding-similarity targets instead of TF-IDF.
 
-**Code changes.** `signrag_contrastive.py`: `--positives graded`
-(`--graded_T`, `--graded_lambda`), `--init_phi PATH`, a dev split grouped
-by sentence, and `--select ret_bleu`. Code is shown to the user before
-any run.
+**Code (written 10-26, smoke-tested, not run).** A separate
+`graded_retriever.py`, so that S2dn's code and runs stay as they are.
+- It reuses the S2dn pieces (fine objective, frozen features, frozen mT5
+  token cache plus text head).
+- Candidates per batch: the batch sentences ∪ the top `--nbr_k` (8)
+  TF-IDF neighbours of each, about 1,000 per batch of 128.
+- Targets: softmax(TF-IDF / `--target_T` 0.1) with the own sentence
+  masked. Loss: soft cross-entropy + `--exact_weight` (0.25) × S2dn's
+  in-batch exact loss.
+- `--init_phi` gives G1; without it phi starts from pose_proj (G2).
+- Selection: dev → train-gallery retrieval BLEU. Test is scored once.
+- The checkpoint is saved in the S2dn format, so
+  `signrag_retrieval.py retrieve --phi` builds hints.
+- G3 (trainable encoder) is not implemented yet.
+- Smoke test (3 steps): epoch 0 = S2dn reproduces test retrieval BLEU
+  5.30 / F1@1 20.74 / F1@3 20.10, matching S3dn exactly.
 
 **Targets to beat (CSL test retrieval BLEU).** S3dn 5.30;
 translate-then-TF-IDF 10.71; ORACLE 18.02.

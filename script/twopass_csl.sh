@@ -17,6 +17,7 @@
 # with at least its memory need free; finished jobs are skipped, failed ones not retried.
 #
 #   ( setsid nohup bash script/twopass_csl.sh > $OUT/rag_inputs/twopass_csl/queue.out 2>&1 & )
+#   bash script/twopass_csl.sh jobs fold2 CSL_twopass_xfit     # named jobs only, in order
 #   bash script/twopass_csl.sh summary
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -89,10 +90,12 @@ train() {       # gpu port out_dir mode [args...]: CSL recipe
     shift 4
     mkdir -p "$dir"
     rm -f "$dir/log.txt"
+    # fold2 aborted on a NaN loss at epoch 3 (finite inputs) on 10-26, as H2S_oracle_words had;
+    # runs launched after that skip such isolated steps (the flag changes nothing otherwise)
     $DS --include localhost:$gpu --master_port "$port" fine_tuning_rag.py \
         --finetune "$CSL_PT" --dataset CSL_Daily --task SLT --dtype fp32 --seed 42 \
         --batch-size 8 --gradient-accumulation-steps 4 --epochs $EPOCHS --opt AdamW --lr 3e-4 \
-        --rag_mode "$mode" "$@" --save-last-only --output_dir "$dir" > "$dir/train.out" 2>&1
+        --rag_mode "$mode" "$@" --skip_nonfinite_loss --save-last-only --output_dir "$dir" > "$dir/train.out" 2>&1
 }
 
 rasft() {       # gpu port name tag pred_file: draft-retrieved train hints, then RA-SFT
@@ -170,6 +173,23 @@ queue() {
     echo "queue end $(date)"
 }
 
+jobs_in_order() {   # name...: run the named jobs one after another, each once its inputs exist
+    declare -gA RUNNING=()                      # and a GPU is free; stop at the first failure
+    local name job need deps g port=29641
+    for name in "$@"; do
+        job=$(printf '%s\n' "${JOBS[@]}" | grep "^$name|") || { echo "unknown job $name"; return 1; }
+        IFS='|' read -r _ need deps <<< "$job"
+        if done_job "$name"; then echo "[skip] $name"; continue; fi
+        until ready "$deps"; do sleep 60; done
+        while :; do
+            for g in $GPUS; do gpu_ok "$g" "$need" && break 2; done
+            sleep 60
+        done
+        launch "$g" $port "$name" || return 1
+        port=$((port + 1))
+    done
+}
+
 summary() {
     echo
     echo "hints (top-3 distinct TF-IDF on the draft; retrieval BLEU = top-1 scored as a translation):"
@@ -203,6 +223,7 @@ EOF
 
 case ${1:-all} in
     all) queue; summary ;;
+    jobs) shift; jobs_in_order "$@"; summary ;;
     summary) summary ;;
-    *) echo "usage: $0 [all|summary]"; exit 1 ;;
+    *) echo "usage: $0 [all|jobs NAME...|summary]"; exit 1 ;;
 esac
